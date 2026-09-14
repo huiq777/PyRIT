@@ -1975,8 +1975,8 @@ class TestScenarioRunServiceRecovery:
 
     async def test_shutdown_reports_all_persistence_failures_and_clears_scheduler(self, mock_all_registries) -> None:
         service = ScenarioRunService()
-        completed_task = asyncio.create_task(asyncio.sleep(0))
-        await completed_task
+        completed_task = MagicMock(spec=asyncio.Task)
+        completed_task.done.return_value = True
         service._active_scenario_result_id = "active"
         service._active_tasks["active"] = _svc_mod._ActiveTask(
             scenario_result_id="active",
