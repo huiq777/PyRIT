@@ -401,6 +401,11 @@ jobs:
       - bash: |
           set -euo pipefail
 
+          # TEMPORARY DIAGNOSTIC (remove after troubleshooting): prints only the
+          # character count of GITHUB_PAT, never the value itself.
+          _debug_pat="${GITHUB_PAT:-}"
+          echo "DEBUG: GITHUB_PAT length = ${#_debug_pat}"
+
           if [[ -z "${GITHUB_PAT:-}" || "$GITHUB_PAT" == '$(GITHUB_PAT)' ]]; then
             echo "GITHUB_PAT is not configured; skipping automated benchmark-store PR. See doc/dashboard/0_dashboard.md for the manual alternative (build_scripts/import_adversarial_benchmark_snapshot.py)."
             exit 0
