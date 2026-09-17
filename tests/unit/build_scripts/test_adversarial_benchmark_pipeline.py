@@ -121,7 +121,13 @@ def test_benchmark_store_pr_step_is_credential_gated() -> None:
 
     assert publish_step["condition"] == "succeeded()"
     assert publish_step["env"]["GITHUB_PAT"] == "$(GITHUB_PAT)"
-    assert """if [[ -z "${GITHUB_PAT:-}" || "$GITHUB_PAT" == '$(GITHUB_PAT)' ]]""" in script
+    # Azure DevOps macro substitution rewrites a literal "$(GITHUB_PAT)" anywhere it
+    # appears in the script body, not just in the env: mapping above. A guard that
+    # compares against that literal directly would have it replaced with the real
+    # secret whenever GITHUB_PAT is configured, making the comparison always match.
+    assert "$(GITHUB_PAT)" not in script
+    assert 'unresolved_macro="${dollar}(GITHUB_PAT)"' in script
+    assert 'if [[ -z "${GITHUB_PAT:-}" || "$GITHUB_PAT" == "$unresolved_macro" ]]' in script
     assert 'git diff --quiet -- "$store_path"' in script
     assert 'git remote set-url origin "https://x-access-token:${GITHUB_PAT}@github.com/microsoft/PyRIT.git"' in script
     assert 'export GH_TOKEN="$GITHUB_PAT"' in script

@@ -401,12 +401,17 @@ jobs:
       - bash: |
           set -euo pipefail
 
-          # TEMPORARY DIAGNOSTIC (remove after troubleshooting): prints only the
-          # character count of GITHUB_PAT, never the value itself.
-          _debug_pat="${GITHUB_PAT:-}"
-          echo "DEBUG: GITHUB_PAT length = ${#_debug_pat}"
-
-          if [[ -z "${GITHUB_PAT:-}" || "$GITHUB_PAT" == '$(GITHUB_PAT)' ]]; then
+          # Azure DevOps macro substitution rewrites GITHUB_PAT's macro reference
+          # anywhere it textually appears in this script, not just in the env:
+          # mapping below. So the "unresolved macro" fallback can't compare
+          # against a literal copy of that reference written directly here --
+          # when the secret IS set, ADO substitutes it into this comparison text
+          # too, making it always match. Build the sentinel from separate parts
+          # so ADO's compile-time scanner never sees that literal substring to
+          # rewrite; it's only reassembled once bash runs.
+          dollar='$'
+          unresolved_macro="${dollar}(GITHUB_PAT)"
+          if [[ -z "${GITHUB_PAT:-}" || "$GITHUB_PAT" == "$unresolved_macro" ]]; then
             echo "GITHUB_PAT is not configured; skipping automated benchmark-store PR. See doc/dashboard/0_dashboard.md for the manual alternative (build_scripts/import_adversarial_benchmark_snapshot.py)."
             exit 0
           fi
