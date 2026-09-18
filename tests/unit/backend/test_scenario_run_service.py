@@ -2137,10 +2137,8 @@ class TestScenarioRunServiceRecovery:
 
             assert not shutdown_task.done()
             assert records["preparing"].scenario_run_state == ScenarioRunState.CREATED
-
             release_preparation.set()
-            await start_task
-            await shutdown_task
+            await asyncio.wait_for(asyncio.gather(start_task, shutdown_task), timeout=5)
 
         assert records["active"].scenario_run_state == ScenarioRunState.FAILED
         assert records["preparing"].scenario_run_state == ScenarioRunState.FAILED
