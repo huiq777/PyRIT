@@ -519,7 +519,7 @@ test.describe("Scenario catalog, history, and live run routing", () => {
       "Chat",
       "History",
       "Scanner",
-      "Targets",
+      "Registry",
       "Configuration",
     ]);
     await expect(page.getByTitle("Scanner")).toHaveAttribute("aria-current", "page");
@@ -704,9 +704,25 @@ test.describe("Scenario catalog, history, and live run routing", () => {
     await mockScenarioAPIs(page);
     let progressRequests = 0;
     let queueRequests = 0;
+    let releasePositionOne: () => void = () => {};
+    let releaseInProgress: () => void = () => {};
+    let releaseCompleted: () => void = () => {};
+    const positionOneGate = new Promise<void>((resolve) => {
+      releasePositionOne = resolve;
+    });
+    const inProgressGate = new Promise<void>((resolve) => {
+      releaseInProgress = resolve;
+    });
+    const completedGate = new Promise<void>((resolve) => {
+      releaseCompleted = resolve;
+    });
 
     await page.route(new RegExp(`/api/scenarios/runs/${QUEUED_RUN_ID}/progress(?:\\?|$)`), async (route) => {
       progressRequests += 1;
+      const gate = [undefined, positionOneGate, inProgressGate, completedGate][progressRequests - 1];
+      if (gate) {
+        await gate;
+      }
       const statuses = ["QUEUED", "QUEUED", "IN_PROGRESS", "COMPLETED"] as const;
       const status = statuses[Math.min(progressRequests - 1, statuses.length - 1)];
       const queuePosition = status === "QUEUED" ? (progressRequests === 1 ? 2 : 1) : null;
@@ -795,24 +811,34 @@ test.describe("Scenario catalog, history, and live run routing", () => {
 
     await page.goto(`/scanner-history/${QUEUED_RUN_ID}`);
 
-    await expect(page.getByTestId("run-state-badge")).toHaveText("Queued");
-    await expect(page.getByTestId("queued-run-progress")).toContainText("Position 2");
-    await expect(page.getByTestId("queued-run-progress")).not.toContainText("%");
-    await expect(page.getByRole("link", { name: new RegExp(ACTIVE_RUN_ID) })).toHaveAttribute(
-      "href",
-      `/scanner-history/${ACTIVE_RUN_ID}`,
-    );
-    const warning = page.getByTestId("scenario-overload-warning");
-    await expect(warning).toContainText("Objective target");
-    await expect(warning).toContainText("2 × HTTP 429/503");
-    await expect(warning).toContainText("without adaptive throttling");
-    await page.setViewportSize({ width: 390, height: 844 });
-    expect((await page.getByRole("button", { name: "Cancel run" }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
-    await expect(page.getByTestId("queued-run-progress")).toContainText("Position 1", { timeout: 6_000 });
-    await expect(page.getByTestId("run-state-badge")).toHaveText("In progress", { timeout: 6_000 });
-    await expect(page.getByTestId("run-state-badge")).toHaveText("Completed", { timeout: 6_000 });
-    expect(progressRequests).toBe(4);
+    try {
+      await expect(page.getByTestId("run-state-badge")).toHaveText("Queued");
+      await expect(page.getByTestId("queued-run-progress")).toContainText("Position 2");
+      await expect(page.getByTestId("queued-run-progress")).not.toContainText("%");
+      await expect(page.getByRole("link", { name: new RegExp(ACTIVE_RUN_ID) })).toHaveAttribute(
+        "href",
+        `/scanner-history/${ACTIVE_RUN_ID}`,
+      );
+      const warning = page.getByTestId("scenario-overload-warning");
+      await expect(warning).toContainText("Objective target");
+      await expect(warning).toContainText("2 × HTTP 429/503");
+      await expect(warning).toContainText("without adaptive throttling");
+      await page.setViewportSize({ width: 390, height: 844 });
+      expect((await page.getByRole("button", { name: "Cancel run" }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
 
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+      releasePositionOne();
+      await expect(page.getByTestId("queued-run-progress")).toContainText("Position 1");
+      releaseInProgress();
+      await expect(page.getByTestId("run-state-badge")).toHaveText("In progress");
+      releaseCompleted();
+      await expect(page.getByTestId("run-state-badge")).toHaveText("Completed");
+      expect(progressRequests).toBe(4);
+
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    } finally {
+      releasePositionOne();
+      releaseInProgress();
+      releaseCompleted();
+    }
   });
 });

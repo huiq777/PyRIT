@@ -39,6 +39,7 @@ from pyrit.backend.routes import (
     version,
 )
 from pyrit.backend.services.configuration_file_service import ConfigurationFileService
+from pyrit.backend.services.converter_service import get_converter_service
 from pyrit.backend.services.environment_file_service import EnvironmentFileService
 from pyrit.backend.services.scenario_run_service import get_scenario_run_service
 from pyrit.common.path import CONFIGURATION_DIRECTORY_PATH
@@ -114,10 +115,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # don't emit noise and don't perform filesystem side effects.
     setup_frontend()
 
+    converter_service = await asyncio.to_thread(get_converter_service)
     try:
         yield
     finally:
-        await scenario_run_service.shutdown_async()
+        try:
+            await scenario_run_service.shutdown_async()
+        finally:
+            try:
+                await converter_service.close_async()
+            finally:
+                get_converter_service.cache_clear()
 
 
 app = FastAPI(
