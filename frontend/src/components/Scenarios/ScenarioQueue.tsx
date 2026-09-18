@@ -35,7 +35,9 @@ export default function ScenarioQueue({
       </div>
       {stale && error && (
         <MessageBar intent="warning">
-          <MessageBarBody>Queue updates paused. Showing the last known order. {error}</MessageBarBody>
+          <MessageBarBody>
+            Queue temporarily unavailable. Showing the last known order while retrying. {error}
+          </MessageBarBody>
         </MessageBar>
       )}
       {loading && !snapshot ? (

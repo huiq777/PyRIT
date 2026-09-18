@@ -110,7 +110,10 @@ param memoryGb string = '2.0'
 @description('Minimum number of replicas')
 param minReplicas int = 1
 
-@description('Maximum number of replicas')
+@description('Maximum number of replicas. Must remain 1 while scenario FIFO scheduling is process-local.')
+@allowed([
+  1
+])
 param maxReplicas int = 1
 
 @description('Azure Container Registry name (for managed identity pull). Used if acrResourceId is not provided.')

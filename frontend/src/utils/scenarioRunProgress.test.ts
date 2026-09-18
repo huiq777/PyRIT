@@ -89,7 +89,7 @@ describe('scenarioRunProgressReducer', () => {
     expect(duplicate.summary).toEqual(updatedSummary)
   })
 
-  it('does not double-count overload evidence during cancellation catch-up', () => {
+  it('treats cumulative overload snapshots as authoritative during cancellation catch-up', () => {
     const overload = {
       component_role: 'objective_target',
       count: 1,
@@ -134,9 +134,19 @@ describe('scenarioRunProgressReducer', () => {
           status: 'CANCELLED',
           overload_summaries: [{
             ...overload,
+            count: 2,
+            rate_limit_count: 2,
             latest_timestamp: '2026-01-01T00:02:00Z',
           }],
         },
+      }),
+      fresh: false,
+    })
+    const repeated = scenarioRunProgressReducer(caughtUp, {
+      type: 'apply-page',
+      page: makePage({
+        plan: null,
+        run: caughtUp.run ?? makePage().run,
       }),
       fresh: false,
     })
@@ -144,6 +154,7 @@ describe('scenarioRunProgressReducer', () => {
     expect(cancelled.overloadSummaries[0].count).toBe(1)
     expect(cancelled.run?.started_at).toBe('2026-01-01T00:00:30Z')
     expect(caughtUp.overloadSummaries[0].count).toBe(2)
+    expect(repeated.overloadSummaries[0].count).toBe(2)
   })
 
   it('retains last-good data and marks it stale after a transient failure', () => {

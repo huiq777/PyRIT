@@ -26,11 +26,10 @@ import {
   ScriptRegular,
 } from '@fluentui/react-icons'
 
-import ScenarioQueue from '@/components/Scenarios/ScenarioQueue'
 import { useScenarioQueue } from '@/hooks/useScenarioQueue'
 import { labelsApi, scenariosApi } from '@/services/api'
 import { toApiError } from '@/services/errors'
-import type { ScenarioRunListItem, ScenarioRunState } from '@/types'
+import type { ScenarioQueueSnapshot, ScenarioRunListItem, ScenarioRunState } from '@/types'
 import { fetchAllPages } from '@/utils/fetchAllPages'
 
 import type { ViewName } from '../Sidebar/Navigation'
@@ -308,15 +307,6 @@ export default function ScenarioHistory({
         )}
       </header>
 
-      <div className={styles.queue}>
-        <ScenarioQueue
-          snapshot={queue.snapshot}
-          loading={queue.loading}
-          stale={queue.stale}
-          error={queue.error}
-        />
-      </div>
-
       <div className={styles.content}>
         {displayLoading ? (
           <div className={styles.emptyState}><Spinner label="Loading scanner history..." /></div>
@@ -338,7 +328,12 @@ export default function ScenarioHistory({
             )}
           </div>
         ) : (
-          <ScenarioHistoryTable runs={runs} onOpenRun={onOpenRun} now={now} />
+          <ScenarioHistoryTable
+            runs={runs}
+            queueSnapshot={queue.snapshot}
+            onOpenRun={onOpenRun}
+            now={now}
+          />
         )}
       </div>
 
@@ -377,11 +372,12 @@ export default function ScenarioHistory({
 
 interface ScenarioHistoryTableProps {
   runs: ScenarioRunListItem[]
+  queueSnapshot: ScenarioQueueSnapshot | null
   onOpenRun: (scenarioResultId: string) => void
   now: number
 }
 
-function ScenarioHistoryTable({ runs, onOpenRun, now }: ScenarioHistoryTableProps) {
+function ScenarioHistoryTable({ runs, queueSnapshot, onOpenRun, now }: ScenarioHistoryTableProps) {
   const styles = useScenarioHistoryStyles()
   return (
     <Table className={styles.table} aria-label="Scanner history" data-testid="scenario-history-table">
@@ -431,7 +427,7 @@ function ScenarioHistoryTable({ runs, onOpenRun, now }: ScenarioHistoryTableProp
                 </span>
               </a>
             </TableCell>
-            <TableCell><Badge appearance="outline">{formatState(run.status)}</Badge></TableCell>
+            <TableCell><Badge appearance="outline">{formatHistoryState(run, queueSnapshot)}</Badge></TableCell>
             <TableCell>
               {run.target ? (
                 <Tooltip content={run.target.endpoint ?? run.target.target_type} relationship="label">
@@ -473,6 +469,31 @@ function ScenarioHistoryTable({ runs, onOpenRun, now }: ScenarioHistoryTableProp
 
 function formatState(value: string): string {
   return value.toLowerCase().replace(/_/g, ' ').replace(/^\w/, (letter: string) => letter.toUpperCase())
+}
+
+function formatHistoryState(run: ScenarioRunListItem, queueSnapshot: ScenarioQueueSnapshot | null): string {
+  if (isTerminal(run.status)) {
+    return formatState(run.status)
+  }
+  if (queueSnapshot?.active?.scenario_result_id === run.scenario_result_id) {
+    return 'In progress'
+  }
+  const position = queueSnapshot?.queued.find(
+    (entry) => entry.scenario_result_id === run.scenario_result_id,
+  )?.position
+  if (typeof position === 'number' && Number.isInteger(position) && position > 0) {
+    return `Queued ${formatOrdinal(position)}`
+  }
+  return formatState(run.status)
+}
+
+function formatOrdinal(value: number): string {
+  const lastTwoDigits = value % 100
+  if (lastTwoDigits >= 11 && lastTwoDigits <= 13) {
+    return `${value}th`
+  }
+  const suffix = value % 10 === 1 ? 'st' : value % 10 === 2 ? 'nd' : value % 10 === 3 ? 'rd' : 'th'
+  return `${value}${suffix}`
 }
 
 function formatTimestamp(value: string): string {
