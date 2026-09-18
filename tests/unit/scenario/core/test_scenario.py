@@ -216,6 +216,7 @@ def test_subclass_implementing_build_atomic_attacks_async_is_concrete():
     assert not ConcreteScenario.__abstractmethods__
 
 
+@pytest.mark.usefixtures("patch_central_database")
 @pytest.mark.parametrize(
     ("default_dataset_config", "expected_scope"),
     [
