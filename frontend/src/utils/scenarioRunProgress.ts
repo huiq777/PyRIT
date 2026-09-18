@@ -146,9 +146,8 @@ export function scenarioRunProgressReducer(
   }
 
   const results = [...resultsById.values()].sort(compareAttempts)
-  const overloadSummaries = mergeOverloadSummaries(
-    shouldReset ? [] : state.overloadSummaries,
-    action.page.run.overload_summaries ?? [],
+  const overloadSummaries = [...(action.page.run.overload_summaries ?? [])].sort(
+    (left, right) => Date.parse(right.latest_timestamp) - Date.parse(left.latest_timestamp),
   )
   return {
     loadStatus: 'ready',
@@ -161,29 +160,6 @@ export function scenarioRunProgressReducer(
     stale: false,
     overloadSummaries,
   }
-}
-
-function mergeOverloadSummaries(
-  existing: ScenarioOverloadSummary[],
-  incoming: ScenarioOverloadSummary[],
-): ScenarioOverloadSummary[] {
-  const byRole = new Map(existing.map((summary) => [summary.component_role, summary]))
-  for (const summary of incoming) {
-    const previous = byRole.get(summary.component_role)
-    byRole.set(summary.component_role, previous ? {
-      component_role: summary.component_role,
-      count: previous.count + summary.count,
-      rate_limit_count: previous.rate_limit_count + summary.rate_limit_count,
-      server_error_count: previous.server_error_count + summary.server_error_count,
-      status_codes: [...new Set([...previous.status_codes, ...summary.status_codes])].sort((left, right) => left - right),
-      latest_timestamp: Date.parse(summary.latest_timestamp) >= Date.parse(previous.latest_timestamp)
-        ? summary.latest_timestamp
-        : previous.latest_timestamp,
-    } : summary)
-  }
-  return [...byRole.values()].sort(
-    (left, right) => Date.parse(right.latest_timestamp) - Date.parse(left.latest_timestamp),
-  )
 }
 
 export function getElapsedMilliseconds(

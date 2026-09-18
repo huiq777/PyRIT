@@ -240,6 +240,6 @@ describe('Scenario catalog-to-run integration', () => {
     expect(screen.getByLabelText('Current route')).toHaveTextContent(
       `/scanner-history/${RUN_ID}`,
     )
-    expect(screen.getByRole('heading', { level: 1, name: SCENARIO_NAME })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: SCENARIO_NAME })).toBeInTheDocument()
   })
 })

@@ -29,6 +29,7 @@ import {
   ChatAddRegular,
   CheckmarkRegular,
   CopyRegular,
+  EditRegular,
   MoreHorizontalRegular,
   OpenRegular,
 } from '@fluentui/react-icons'
@@ -41,6 +42,14 @@ import type {
   MessageDisplayPiece,
 } from '../../types'
 import { useMessageListStyles } from './MessageList.styles'
+
+interface ProcessingErrorRecovery {
+  messageIndex: number
+  actionLabel: string
+  description: string
+  disabled?: boolean
+  onRecover: () => void | Promise<void>
+}
 
 interface MessageListProps {
   messages: Message[]
@@ -66,6 +75,8 @@ interface MessageListProps {
   globalMarkdown?: boolean
   /** Collapse long user prompts when rendering persisted attack history. */
   collapseLongPrompts?: boolean
+  /** Recovery action for the processing error caused by the most recent send. */
+  processingErrorRecovery?: ProcessingErrorRecovery
 }
 
 const LONG_PROMPT_CHARACTER_THRESHOLD = 4_000
@@ -628,6 +639,7 @@ export default function MessageList({
   noTargetSelected,
   globalMarkdown = false,
   collapseLongPrompts = false,
+  processingErrorRecovery,
 }: MessageListProps) {
   const styles = useMessageListStyles()
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -682,6 +694,8 @@ export default function MessageList({
         const isSimulated = message.role === 'simulated_assistant'
         const timestamp = new Date(message.timestamp).toLocaleTimeString()
         const avatarName = isUser ? 'User' : isSimulated ? 'Simulated' : 'Assistant'
+        const canRecoverProcessingError = message.error?.type === 'processing'
+          && processingErrorRecovery?.messageIndex === index
         const renderPieces = getRenderMessagePieces(message, index)
 
         return (
@@ -705,6 +719,24 @@ export default function MessageList({
                       <Text weight="semibold">{message.error.type}</Text>
                       {message.error.description && (
                         <Text>: {message.error.description}</Text>
+                      )}
+                      {canRecoverProcessingError && processingErrorRecovery && (
+                        <div className={styles.errorRecovery}>
+                          <Text block>
+                            {processingErrorRecovery.description}
+                          </Text>
+                          <Button
+                            appearance="primary"
+                            size="small"
+                            icon={<EditRegular />}
+                            className={styles.errorRecoveryButton}
+                            onClick={() => { void processingErrorRecovery.onRecover() }}
+                            disabled={processingErrorRecovery.disabled}
+                            data-testid={`recover-processing-error-btn-${index}`}
+                          >
+                            {processingErrorRecovery.actionLabel}
+                          </Button>
+                        </div>
                       )}
                     </MessageBarBody>
                   </MessageBar>
@@ -868,7 +900,7 @@ export default function MessageList({
               )}
 
               {/* Unified action buttons – shown on all non-user, non-loading messages */}
-              {!isUser && !message.isLoading && (
+              {!isUser && !message.isLoading && !message.error && (
                 <div className={styles.messageActions} data-testid={`message-actions-${index}`}>
                   {/* 1. Copy to input box in this conversation */}
                   {onCopyToInput && (() => {

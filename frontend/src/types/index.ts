@@ -1,6 +1,33 @@
+import type { Theme } from '@fluentui/react-components'
+
+import type { THEME_PRESETS } from '@/themes/themePresets'
+
 // ============================================================================
 // Frontend UI Types
 // ============================================================================
+
+export type ThemeMode = 'system' | keyof typeof THEME_PRESETS
+
+export type ResolvedTheme = 'light' | 'dark' | 'high-contrast'
+
+export interface ThemeBackground {
+  readonly imageUrl: string
+  readonly opacity: number
+}
+
+export interface ThemePreset {
+  readonly label: string
+  readonly resolved: 'light' | 'dark'
+  readonly theme: Theme
+  readonly background?: ThemeBackground
+}
+
+export interface ThemeContextValue {
+  readonly mode: ThemeMode
+  readonly resolved: ResolvedTheme
+  readonly background?: ThemeBackground
+  readonly setMode: (mode: ThemeMode) => void
+}
 
 export interface MessageAttachment {
   type: 'image' | 'audio' | 'video' | 'file'
@@ -14,6 +41,10 @@ export interface MessageAttachment {
    */
   size?: number
   file?: File
+  /** Raw backend value used when reconstructing a persisted attachment for resubmission. */
+  sourceValue?: string
+  /** Backend data type paired with sourceValue so persisted attachments retain their original semantics. */
+  sourceDataType?: string
   /** Backend piece ID — preserved so remix/copy can trace back to the original piece */
   pieceId?: string
   /** Backend prompt_metadata — preserved so video_id etc. carry over on remix/copy */
@@ -74,6 +105,11 @@ export interface Message {
 export interface MessageError {
   type: string // e.g. 'blocked', 'processing', 'empty', 'unknown'
   description?: string
+}
+
+export interface ChatSendOutcome {
+  status: 'sent' | 'retryable_failure' | 'non_retryable_failure'
+  clearDraft: boolean
 }
 
 // ============================================================================
@@ -233,10 +269,18 @@ export interface ConverterIdentifier {
 export interface ConverterInstance {
   converter_id: string
   identifier: ConverterIdentifier
+  is_llm_based?: boolean
+  description?: string | null
 }
 
 export interface ConverterListResponse {
   items: ConverterInstance[]
+}
+
+export interface CreateConverterRequest {
+  name?: string
+  type: string
+  params?: Record<string, unknown>
 }
 
 export interface Parameter {
@@ -247,10 +291,11 @@ export interface Parameter {
   default?: string | string[] | null
   choices?: string[] | null
   is_list?: boolean
+  reference_type?: 'target' | 'converter' | 'scorer' | 'scenario' | null
   description?: string | null
 }
 
-export interface ConverterCatalogEntry {
+export interface ConverterTypeEntry {
   converter_type: string
   supported_input_types: string[]
   supported_output_types: string[]
@@ -259,9 +304,13 @@ export interface ConverterCatalogEntry {
   description?: string | null
 }
 
-export interface ConverterCatalogResponse {
-  items: ConverterCatalogEntry[]
+export interface ConverterTypeListResponse {
+  items: ConverterTypeEntry[]
 }
+
+/** Temporary compatibility names used by the existing chat converter panel. */
+export type ConverterCatalogEntry = ConverterTypeEntry
+export type ConverterCatalogResponse = ConverterTypeListResponse
 
 export interface TargetCatalogEntry {
   target_type: string
@@ -320,6 +369,11 @@ export interface AttackSummary {
   related_conversation_ids: string[]
   operator?: string | null
   operation?: string | null
+  related_conversations?: Array<{
+    conversation_id: string
+    conversation_type: 'adversarial' | 'preparation' | 'pruned' | 'score' | 'converter'
+    description?: string | null
+  }>
   labels: Record<string, string>
   created_at: string
   updated_at: string
@@ -367,6 +421,8 @@ export interface BackendScore {
   timestamp: string
 }
 
+export type PromptResponseError = 'blocked' | 'none' | 'processing' | 'empty' | 'unknown'
+
 export interface ComponentIdentifier {
   class_name: string
   class_module: string
@@ -409,8 +465,9 @@ export interface BackendMessagePiece {
   original_filename?: string | null
   converted_filename?: string | null
   prompt_metadata?: Record<string, unknown> | null
+  converter_identifiers?: Array<Record<string, unknown>>
   scores: BackendScore[]
-  response_error: string // 'none' | 'blocked' | 'processing' | 'empty' | 'unknown'
+  response_error: PromptResponseError
   response_error_description?: string | null
 }
 
@@ -421,9 +478,16 @@ export interface BackendMessage {
   created_at: string
 }
 
+export interface TargetResponseStatus {
+  response_error: PromptResponseError
+  request_turn_number: number
+  response_turn_number: number
+}
+
 export interface ConversationMessagesResponse {
   conversation_id: string
   messages: BackendMessage[]
+  target_response_status: TargetResponseStatus | null
 }
 
 export interface MessagePieceRequest {
