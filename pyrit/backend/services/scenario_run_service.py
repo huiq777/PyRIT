@@ -142,6 +142,9 @@ class ScenarioRunService:
 
     Uses CentralMemory (database) as the source of truth for run state.
     Keeps executable objects in a process-local single-active FIFO scheduler.
+    FIFO ordering therefore spans only runs submitted to the same backend
+    process. Deploy one backend replica to preserve a global admission order;
+    multiple replicas require a shared database-backed scheduler or lease.
     """
 
     #: Seconds to let initialization's own background tasks (for example HTTP client teardown
@@ -744,44 +747,46 @@ class ScenarioRunService:
         task: asyncio.Task[None] | None = None
         retry_tasks: list[asyncio.Task[None]] = []
         errors: list[Exception] = []
-        async with self._scheduler_lock:
-            self._stopping = True
-            retry_tasks = list(self._handoff_retry_tasks)
-            queued = list(self._queued_runs)
-            self._queued_runs.clear()
-            if queued:
-                self._queue_revision += 1
-            for run in queued:
-                try:
-                    await asyncio.to_thread(
-                        self._memory.update_scenario_run_state,
-                        scenario_result_id=run.scenario_result_id,
-                        scenario_run_state=ScenarioRunState.FAILED,
-                        error_message=_SHUTDOWN_INTERRUPTION_REASON,
-                        error_type=_INTERRUPTED_ERROR_TYPE,
-                    )
-                except Exception as exc:
-                    errors.append(exc)
-            if self._active_scenario_result_id is not None:
-                active = self._active_tasks[self._active_scenario_result_id]
-                active.cancellation_state = ScenarioRunState.FAILED
-                active.cancellation_reason = _SHUTDOWN_INTERRUPTION_REASON
-                active.cancellation_error_type = _INTERRUPTED_ERROR_TYPE
-                task = active.task
-                if task is None or task.done():
+        async with self._launch_lock:
+            async with self._scheduler_lock:
+                self._stopping = True
+                retry_tasks = list(self._handoff_retry_tasks)
+                queued = list(self._queued_runs)
+                self._queued_runs.clear()
+                if queued:
+                    self._queue_revision += 1
+                for run in queued:
                     try:
                         await asyncio.to_thread(
                             self._memory.update_scenario_run_state,
-                            scenario_result_id=active.scenario_result_id,
+                            scenario_result_id=run.scenario_result_id,
                             scenario_run_state=ScenarioRunState.FAILED,
                             error_message=_SHUTDOWN_INTERRUPTION_REASON,
                             error_type=_INTERRUPTED_ERROR_TYPE,
                         )
                     except Exception as exc:
                         errors.append(exc)
-                    self._active_scenario_result_id = None
-                    self._release_completed_task(scenario_result_id=active.scenario_result_id)
-                    self._queue_revision += 1
+                if self._active_scenario_result_id is not None:
+                    active = self._active_tasks[self._active_scenario_result_id]
+                    active.cancellation_state = ScenarioRunState.FAILED
+                    active.cancellation_reason = _SHUTDOWN_INTERRUPTION_REASON
+                    active.cancellation_error_type = _INTERRUPTED_ERROR_TYPE
+                    task = active.task
+                    if task is None or task.done():
+                        try:
+                            await asyncio.to_thread(
+                                self._memory.update_scenario_run_state,
+                                scenario_result_id=active.scenario_result_id,
+                                scenario_run_state=ScenarioRunState.FAILED,
+                                error_message=_SHUTDOWN_INTERRUPTION_REASON,
+                                error_type=_INTERRUPTED_ERROR_TYPE,
+                            )
+                        except Exception as exc:
+                            errors.append(exc)
+                        self._active_scenario_result_id = None
+                        self._release_completed_task(scenario_result_id=active.scenario_result_id)
+                        self._queue_revision += 1
+        await asyncio.to_thread(self._prepare_executor.shutdown, wait=True)
         if task is not None and not task.done():
             task.cancel()
             try:
@@ -1078,8 +1083,9 @@ class ScenarioRunService:
             active.retain_error_on_terminalization = True
             try:
                 await asyncio.to_thread(
-                    self._memory.update_scenario_run_state,
+                    self._memory.try_update_scenario_run_state,
                     scenario_result_id=scenario_result_id,
+                    expected_states={ScenarioRunState.CREATED, ScenarioRunState.IN_PROGRESS},
                     scenario_run_state=ScenarioRunState.FAILED,
                     error_message=str(e),
                     error_type=type(e).__name__,

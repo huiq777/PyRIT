@@ -1,5 +1,5 @@
 import { FluentProvider, webLightTheme } from '@fluentui/react-components'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { useScenarioQueue } from '@/hooks/useScenarioQueue'
@@ -206,6 +206,96 @@ describe('ScenarioHistory', () => {
 
     expect(await screen.findByText('Not started')).toBeInTheDocument()
     expect(screen.queryByText(/\d+(?:s|m|h).*(?:elapsed|in progress)$/)).not.toBeInTheDocument()
+  })
+
+  it('shows the active run and queue order in the State column while preserving terminal states', async () => {
+    const activeRun = {
+      ...RUN,
+      scenario_result_id: 'active-run',
+      status: 'IN_PROGRESS' as const,
+      completed_at: null,
+    }
+    const firstQueuedRun = {
+      ...RUN,
+      scenario_result_id: 'queued-run-1',
+      status: 'QUEUED' as const,
+      started_at: null,
+      completed_at: null,
+    }
+    const secondQueuedRun = {
+      ...firstQueuedRun,
+      scenario_result_id: 'queued-run-2',
+    }
+    const terminalRun = {
+      ...RUN,
+      scenario_result_id: 'failed-run',
+      status: 'FAILED' as const,
+    }
+    mockUseScenarioQueue.mockReturnValue({
+      snapshot: {
+        revision: 4,
+        snapshot_at: '2026-01-01T00:00:00Z',
+        active: {
+          scenario_result_id: 'active-run',
+          scenario_name: 'RedTeamScenario',
+          scenario_registry_name: 'foundry.red_team',
+          created_at: RUN.created_at,
+          enqueued_at: RUN.created_at,
+          started_at: RUN.started_at,
+          state: 'IN_PROGRESS',
+        },
+        queued: [
+          {
+            scenario_result_id: 'queued-run-1',
+            scenario_name: 'RedTeamScenario',
+            scenario_registry_name: 'foundry.red_team',
+            created_at: RUN.created_at,
+            enqueued_at: RUN.created_at,
+            state: 'QUEUED',
+            position: 1,
+          },
+          {
+            scenario_result_id: 'queued-run-2',
+            scenario_name: 'RedTeamScenario',
+            scenario_registry_name: 'foundry.red_team',
+            created_at: RUN.created_at,
+            enqueued_at: RUN.created_at,
+            state: 'QUEUED',
+            position: 2,
+          },
+          {
+            scenario_result_id: 'failed-run',
+            scenario_name: 'RedTeamScenario',
+            scenario_registry_name: 'foundry.red_team',
+            created_at: RUN.created_at,
+            enqueued_at: RUN.created_at,
+            state: 'QUEUED',
+            position: 3,
+          },
+        ],
+      },
+      loading: false,
+      stale: false,
+      error: null,
+      retry: jest.fn(),
+    })
+    mockedScenariosApi.listRuns.mockResolvedValue({
+      items: [activeRun, firstQueuedRun, secondQueuedRun, terminalRun],
+      pagination: { limit: 25, has_more: false },
+    })
+
+    renderHistory()
+
+    expect(within(await screen.findByTestId('scenario-history-row-active-run')).getByText('In progress'))
+      .toBeInTheDocument()
+    expect(within(screen.getByTestId('scenario-history-row-queued-run-1')).getByText('Queued 1st'))
+      .toBeInTheDocument()
+    expect(within(screen.getByTestId('scenario-history-row-queued-run-2')).getByText('Queued 2nd'))
+      .toBeInTheDocument()
+    expect(within(screen.getByTestId('scenario-history-row-failed-run')).getByText('Failed'))
+      .toBeInTheDocument()
+    expect(screen.queryByText('Queued 3rd')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('scenario-queue')).not.toBeInTheDocument()
   })
 
   it('does not display queue wait for a terminal run that never started', async () => {

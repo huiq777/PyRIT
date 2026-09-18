@@ -109,7 +109,7 @@ describe('ScenarioQueue', () => {
     renderQueue(SNAPSHOT, { stale: true, error: 'Temporary failure.' })
 
     expect(screen.getByText(
-      'Queue updates paused. Showing the last known order. Temporary failure.',
+      'Queue temporarily unavailable. Showing the last known order while retrying. Temporary failure.',
     )).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /active\.scenario/i })).toBeInTheDocument()
   })

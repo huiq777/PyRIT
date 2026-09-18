@@ -1977,6 +1977,98 @@ class TestScenarioRunServiceRecovery:
         assert all(call.kwargs["error_type"] == "ScenarioInterruptedError" for call in failure_calls)
         assert all("shut down" in call.kwargs["error_message"] for call in failure_calls)
 
+    async def test_shutdown_waits_for_preparation_before_terminalizing_run(self, mock_all_registries) -> None:
+        mock_memory = mock_all_registries["memory"]
+        records = {
+            "active": _make_db_scenario_result(
+                result_id="active",
+                run_state=ScenarioRunState.IN_PROGRESS,
+            ),
+            "preparing": _make_db_scenario_result(
+                result_id="preparing",
+                run_state=ScenarioRunState.CREATED,
+            ),
+        }
+        active_started = asyncio.Event()
+        preparation_started = threading.Event()
+        release_preparation = threading.Event()
+        shutdown_started = asyncio.Event()
+
+        async def _run_active() -> None:
+            active_started.set()
+            await asyncio.Event().wait()
+
+        active_scenario = MagicMock()
+        active_scenario.run_async = AsyncMock(side_effect=_run_active)
+        prepared_scenario = MagicMock()
+        prepared_scenario._scenario_result_id = "preparing"
+        prepared_scenario.run_async = AsyncMock()
+
+        def _get_results(*, scenario_result_ids: list[str] | None = None) -> list[MagicMock]:
+            if scenario_result_ids is None:
+                return list(records.values())
+            return [records[run_id] for run_id in scenario_result_ids if run_id in records]
+
+        def _update_state(*, scenario_result_id: str, scenario_run_state: ScenarioRunState, **_: object) -> None:
+            records[scenario_result_id].scenario_run_state = scenario_run_state
+
+        def _try_update_state(
+            *,
+            scenario_result_id: str,
+            expected_states: set[ScenarioRunState],
+            scenario_run_state: ScenarioRunState,
+            **_: object,
+        ) -> bool:
+            record = records[scenario_result_id]
+            if record.scenario_run_state not in expected_states:
+                return False
+            record.scenario_run_state = scenario_run_state
+            return True
+
+        def _prepare(*, request: Any) -> MagicMock:
+            preparation_started.set()
+            if not release_preparation.wait(timeout=5):
+                raise TimeoutError("Test did not release scenario preparation.")
+            return prepared_scenario
+
+        async def _shutdown() -> None:
+            shutdown_started.set()
+            await service.shutdown_async()
+
+        mock_memory.get_scenario_results.side_effect = _get_results
+        mock_memory.update_scenario_run_state.side_effect = _update_state
+        mock_memory.try_update_scenario_run_state.side_effect = _try_update_state
+        mock_memory.update_scenario_run_state_and_metadata_fields.side_effect = _update_state
+
+        service = ScenarioRunService()
+        active = _svc_mod._ActiveTask(
+            scenario_result_id="active",
+            scenario=active_scenario,
+        )
+        service._active_scenario_result_id = "active"
+        service._active_tasks["active"] = active
+        active.task = asyncio.create_task(service._execute_run_async(scenario_result_id="active"))
+        await active_started.wait()
+
+        with patch.object(service, "_prepare_run_blocking", _prepare):
+            start_task = asyncio.create_task(service.start_run_async(request=_make_request()))
+            assert await asyncio.to_thread(preparation_started.wait, 5)
+            shutdown_task = asyncio.create_task(_shutdown())
+            await shutdown_started.wait()
+
+            assert not shutdown_task.done()
+            assert records["preparing"].scenario_run_state == ScenarioRunState.CREATED
+
+            release_preparation.set()
+            await start_task
+            await shutdown_task
+
+        assert records["active"].scenario_run_state == ScenarioRunState.FAILED
+        assert records["preparing"].scenario_run_state == ScenarioRunState.FAILED
+        assert service.get_queue_snapshot().active is None
+        assert service.get_queue_snapshot().queued == []
+        prepared_scenario.run_async.assert_not_awaited()
+
     async def test_shutdown_reports_all_persistence_failures_and_clears_scheduler(self, mock_all_registries) -> None:
         service = ScenarioRunService()
         completed_task = MagicMock(spec=asyncio.Task)
@@ -2212,6 +2304,71 @@ class TestScenarioRunServiceExecution:
         fetched = service.get_run(scenario_result_id=response.scenario_result_id)
         assert fetched is not None
         assert fetched.error == "scenario exploded"
+
+    async def test_execute_run_retains_richer_terminal_error_from_scenario(self, mock_all_registries) -> None:
+        service = ScenarioRunService()
+        mock_instance = mock_all_registries["scenario_instance"]
+        mock_memory = mock_all_registries["memory"]
+        persisted = mock_all_registries["db_result"]
+        execution_started = asyncio.Event()
+        release_execution = asyncio.Event()
+
+        def _update_state_and_metadata(
+            *,
+            scenario_run_state: ScenarioRunState,
+            **_: object,
+        ) -> None:
+            persisted.scenario_run_state = scenario_run_state
+
+        def _try_update_state(
+            *,
+            expected_states: set[ScenarioRunState],
+            scenario_run_state: ScenarioRunState,
+            error_message: str | None = None,
+            error_type: str | None = None,
+            **_: object,
+        ) -> bool:
+            if persisted.scenario_run_state not in expected_states:
+                return False
+            persisted.scenario_run_state = scenario_run_state
+            persisted.error_message = error_message
+            persisted.error_type = error_type
+            return True
+
+        async def _run() -> None:
+            execution_started.set()
+            await release_execution.wait()
+            persisted.scenario_run_state = ScenarioRunState.FAILED
+            persisted.error_message = "The target rejected the request body."
+            persisted.error_type = "BadRequestError"
+            raise RuntimeError("One or more attacks failed.")
+
+        mock_memory.update_scenario_run_state_and_metadata_fields.side_effect = _update_state_and_metadata
+        mock_memory.try_update_scenario_run_state.side_effect = _try_update_state
+        mock_instance.run_async = AsyncMock(side_effect=_run)
+
+        response = await service.start_run_async(request=_make_request())
+        await execution_started.wait()
+        active = service._active_tasks.get(response.scenario_result_id)
+        assert active is not None
+        assert active.task is not None
+
+        release_execution.set()
+        await active.task
+
+        fetched = service.get_run(scenario_result_id=response.scenario_result_id)
+        assert fetched is not None
+        assert fetched.status == ScenarioRunState.FAILED
+        assert fetched.error == "The target rejected the request body."
+        assert fetched.error_type == "BadRequestError"
+        mock_memory.update_scenario_run_state.assert_not_called()
+        mock_memory.try_update_scenario_run_state.assert_called_once_with(
+            scenario_result_id=response.scenario_result_id,
+            expected_states={ScenarioRunState.CREATED, ScenarioRunState.IN_PROGRESS},
+            scenario_run_state=ScenarioRunState.FAILED,
+            error_message="One or more attacks failed.",
+            error_type="RuntimeError",
+        )
 
 
 class TestScenarioRunServiceGetResults:
