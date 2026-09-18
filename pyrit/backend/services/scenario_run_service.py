@@ -916,10 +916,14 @@ class ScenarioRunService:
         self._handoff_retry_tasks.add(retry_task)
         retry_task.add_done_callback(self._handoff_retry_tasks.discard)
 
+    def _can_retry_active_run(self, *, scenario_result_id: str) -> bool:
+        """Return whether retry work may continue for the active run."""
+        return not self._stopping and self._active_scenario_result_id == scenario_result_id
+
     async def _retry_handoff_async(self, *, scenario_result_id: str) -> None:
         """Retry scheduler handoff with bounded exponential delay until it succeeds or shutdown begins."""
         delay = _SCHEDULER_RETRY_INITIAL_SECONDS
-        while not self._stopping and self._active_scenario_result_id == scenario_result_id:
+        while self._can_retry_active_run(scenario_result_id=scenario_result_id):
             await asyncio.sleep(delay)
             try:
                 await self._handoff_scheduler_async(scenario_result_id=scenario_result_id)
@@ -932,11 +936,11 @@ class ScenarioRunService:
     async def _retry_terminalization_async(self, *, active: _ActiveTask) -> None:
         """Retry a failed cancellation transition, then perform the terminal handoff."""
         delay = _SCHEDULER_RETRY_INITIAL_SECONDS
-        while not self._stopping and self._active_scenario_result_id == active.scenario_result_id:
+        while self._can_retry_active_run(scenario_result_id=active.scenario_result_id):
             await asyncio.sleep(delay)
             try:
                 async with self._scheduler_lock:
-                    if self._stopping or self._active_scenario_result_id != active.scenario_result_id:
+                    if not self._can_retry_active_run(scenario_result_id=active.scenario_result_id):
                         return
                     await asyncio.to_thread(
                         self._memory.try_update_scenario_run_state,
@@ -1379,7 +1383,7 @@ class ScenarioRunService:
             created_at=scenario_result.creation_time,
             started_at=self._load_started_at(scenario_result=scenario_result),
             completed_at=scenario_result.completion_time if self._is_terminal_state(status) else None,
-            pyrit_version=scenario_result.pyrit_version if isinstance(scenario_result.pyrit_version, str) else None,
+            pyrit_version=scenario_result.pyrit_version,
             target=target,
             techniques_used=list(techniques_used),
             datasets_used=list(datasets_used),
@@ -1403,10 +1407,10 @@ class ScenarioRunService:
         Returns:
             list[str]: De-duplicated technique display names.
         """
-        configured = (
-            list(dict.fromkeys(str(technique) for technique in scenario_identifier.techniques or []))
-            if scenario_identifier
-            else []
+        configured = list(
+            dict.fromkeys(
+                str(technique) for technique in ScenarioRunService._identifier_techniques(scenario_identifier)
+            )
         )
         if configured:
             return configured
@@ -1580,6 +1584,16 @@ class ScenarioRunService:
         except ValidationError:
             return None
         return started_at if started_at.tzinfo is not None else None
+
+    @staticmethod
+    def _identifier_techniques(scenario_identifier: ScenarioIdentifier | None) -> list[str]:
+        """
+        Read techniques when legacy persisted metadata has an identifier.
+
+        Returns:
+            list[str]: Stored techniques or an empty list.
+        """
+        return list(scenario_identifier.techniques or []) if scenario_identifier is not None else []
 
     @staticmethod
     def _safe_run_metadata(

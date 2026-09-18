@@ -830,7 +830,10 @@ class Scenario(ABC):
         """
         configured_dataset = self._dataset_config
         self._dataset_config = configured_dataset
-        if type(self)._resolve_seed_groups_by_dataset_async is Scenario._resolve_seed_groups_by_dataset_async:
+        resolver_owner = next(
+            owner for owner in type(self).__mro__ if "_resolve_seed_groups_by_dataset_async" in owner.__dict__
+        )
+        if resolver_owner is Scenario:
             full_groups, selected_groups = await configured_dataset.resolve_attack_groups_for_estimate_async()
         else:
             full_groups = await self._resolve_seed_groups_by_dataset_async(apply_sampling=False)

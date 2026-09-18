@@ -381,10 +381,19 @@ class ScenarioProgressReadModel:
     @staticmethod
     def _result_order_key(attack_result: AttackResult) -> tuple[datetime, str]:
         """Return a deterministic chronological key for one hydrated result attempt."""
-        timestamp = attack_result.timestamp
-        if not isinstance(timestamp, datetime):
-            timestamp = datetime.min.replace(tzinfo=UTC)
-        return timestamp, str(attack_result.attack_result_id)
+        return ScenarioProgressReadModel._timestamp_order_key(attack_result.timestamp), str(
+            attack_result.attack_result_id
+        )
+
+    @staticmethod
+    def _timestamp_order_key(timestamp: object) -> datetime:
+        """
+        Normalize potentially malformed timestamps from mutable result objects.
+
+        Returns:
+            datetime: The timestamp or a stable earliest-time fallback.
+        """
+        return timestamp if isinstance(timestamp, datetime) else datetime.min.replace(tzinfo=UTC)
 
     @staticmethod
     def total_retry_pressure(*, attempts_per_unit: Iterable[int], persisted_retries: Iterable[int]) -> int:
@@ -871,8 +880,7 @@ class ScenarioProgressReadModel:
                 return ScenarioProgressResultKind.ADAPTIVE_ORCHESTRATION, None, None
             if is_sequential_envelope:
                 return ScenarioProgressResultKind.AGGREGATE_PARENT, None, None
-            if group_kind is ScenarioRunPlanGroupKind.ATTACK:
-                return ScenarioProgressResultKind.ATTACK, None, None
+            return ScenarioProgressResultKind.ATTACK, None, None
 
         if atomic_attack_name == "baseline":
             return ScenarioProgressResultKind.DIRECT_BASELINE, None, None
