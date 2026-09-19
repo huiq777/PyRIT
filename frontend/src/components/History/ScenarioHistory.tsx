@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   Badge,
@@ -94,6 +94,7 @@ export default function ScenarioHistory({
 }: ScenarioHistoryProps) {
   const styles = useScenarioHistoryStyles()
   const queue = useScenarioQueue()
+  const lastQueueRevisionRef = useRef<number | null>(null)
   const [runs, setRuns] = useState<ScenarioRunListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -119,6 +120,7 @@ export default function ScenarioHistory({
     filterKey,
     nonce: 0,
   })
+  const queueRevision = queue.snapshot?.revision
 
   const requestPage = useCallback((cursor?: string) => {
     setLoading(true)
@@ -210,6 +212,15 @@ export default function ScenarioHistory({
     filters.operation,
     filters.otherLabels,
   ])
+
+  useEffect(() => {
+    if (queueRevision === undefined) return
+    const previousRevision = lastQueueRevisionRef.current
+    lastQueueRevisionRef.current = queueRevision
+    if (previousRevision === null || previousRevision === queueRevision) return
+    const currentCursor = fetchToken.filterKey === filterKey ? fetchToken.cursor : undefined
+    requestPage(currentCursor)
+  }, [fetchToken.cursor, fetchToken.filterKey, filterKey, queueRevision, requestPage])
 
   const setFilter = <K extends keyof ScenarioHistoryFilters>(
     key: K,

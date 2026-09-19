@@ -298,6 +298,69 @@ describe('ScenarioHistory', () => {
     expect(screen.queryByTestId('scenario-queue')).not.toBeInTheDocument()
   })
 
+  it('refreshes persisted run state when the queue revision changes', async () => {
+    const inProgressRun = {
+      ...RUN,
+      status: 'IN_PROGRESS' as const,
+      completed_at: null,
+    }
+    mockUseScenarioQueue.mockReturnValue({
+      snapshot: {
+        revision: 4,
+        snapshot_at: '2026-01-01T00:00:00Z',
+        active: {
+          scenario_result_id: RUN.scenario_result_id,
+          scenario_name: RUN.scenario_name,
+          scenario_registry_name: RUN.scenario_registry_name,
+          created_at: RUN.created_at,
+          enqueued_at: RUN.created_at,
+          started_at: RUN.started_at,
+          state: 'IN_PROGRESS',
+        },
+        queued: [],
+      },
+      loading: false,
+      stale: false,
+      error: null,
+      retry: jest.fn(),
+    })
+    mockedScenariosApi.listRuns
+      .mockResolvedValueOnce({
+        items: [inProgressRun],
+        pagination: { limit: 25, has_more: false },
+      })
+      .mockResolvedValueOnce({
+        items: [RUN],
+        pagination: { limit: 25, has_more: false },
+      })
+
+    const history = renderHistory()
+    expect(await screen.findByText('In progress')).toBeInTheDocument()
+
+    mockUseScenarioQueue.mockReturnValue({
+      snapshot: {
+        revision: 5,
+        snapshot_at: '2026-01-01T00:01:00Z',
+        active: null,
+        queued: [],
+      },
+      loading: false,
+      stale: false,
+      error: null,
+      retry: jest.fn(),
+    })
+    history.rerender(
+      <FluentProvider theme={webLightTheme}>
+        <main>
+          <ScenarioHistory {...defaultProps} />
+        </main>
+      </FluentProvider>,
+    )
+
+    expect(await screen.findByText('Completed')).toBeInTheDocument()
+    expect(mockedScenariosApi.listRuns).toHaveBeenCalledTimes(2)
+  })
+
   it('does not display queue wait for a terminal run that never started', async () => {
     mockedScenariosApi.listRuns.mockResolvedValue({
       items: [{

@@ -201,7 +201,7 @@ class TestListScenarioRunsRoute:
     async def test_list_runs_requires_keyword_arguments(self) -> None:
         """Test that route parameters cannot be passed positionally."""
         with pytest.raises(TypeError, match="positional"):
-            await list_scenario_runs(None, None, None, 100, None)
+            await list_scenario_runs(None, None, None, 100, None)  # ty: ignore[too-many-positional-arguments]
 
     def test_list_runs_returns_multiple_runs(self, client: TestClient) -> None:
         """Test that list runs returns all tracked runs."""
