@@ -20,6 +20,10 @@ from pyrit.executor.attack.component import (
 )
 from pyrit.executor.attack.component.modality_router import _ModalityFeedbackRouter
 from pyrit.executor.attack.core.attack_config import AttackAdversarialConfig, AttackConverterConfig, AttackScoringConfig
+from pyrit.executor.attack.core.attack_preparation import (
+    AttackPreparationFailure,
+    AttackPreparationFailureKind,
+)
 from pyrit.executor.attack.core.attack_strategy import attack_outcome_from_score
 from pyrit.executor.attack.multi_turn.multi_turn_attack_strategy import (
     ConversationSession,
@@ -49,8 +53,6 @@ if TYPE_CHECKING:
     from pyrit.prompt_target.common.prompt_target import PromptTarget
 
 logger = logging.getLogger(__name__)
-
-ADVERSARIAL_CHAT_BLOCKED_METADATA_KEY = "adversarial_chat_blocked"
 
 # RedTeamingAttack sets a system prompt on its adversarial target and drives a multi-turn dialogue
 # through it. Both capabilities must be natively supported — adaptation would silently change the
@@ -350,11 +352,18 @@ class RedTeamingAttack(MultiTurnAttackStrategy[MultiTurnAttackContext[Any], Atta
                     context=context, adversarial_manager=adversarial_manager
                 )
             except AdversarialChatResponseBlockedException:
+                # The adversarial model's provider blocked its own response, so no attacker turn
+                # exists and the objective target was never probed. That is an absence of data,
+                # not a defensive win for the target, so the outcome stays UNDETERMINED.
+                preparation_failure = AttackPreparationFailure(
+                    kind=AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED,
+                    reason="Adversarial chat blocked the attack before it could generate the next prompt.",
+                )
                 return self._create_attack_result(
                     context=context,
-                    outcome=AttackOutcome.FAILURE,
-                    outcome_reason="Adversarial chat blocked the attack before it could generate the next prompt.",
-                    metadata={ADVERSARIAL_CHAT_BLOCKED_METADATA_KEY: True},
+                    outcome=AttackOutcome.UNDETERMINED,
+                    outcome_reason=preparation_failure.reason,
+                    metadata=preparation_failure.to_metadata(),
                 )
 
             # Send the generated message to the objective target

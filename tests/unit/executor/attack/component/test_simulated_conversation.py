@@ -10,6 +10,10 @@ import pytest
 
 from pyrit.exceptions import AdversarialChatResponseBlockedException, InvalidJsonException
 from pyrit.executor.attack import AttackConverterConfig, RTASystemPromptPaths
+from pyrit.executor.attack.core.attack_preparation import (
+    AttackPreparationFailure,
+    AttackPreparationFailureKind,
+)
 from pyrit.executor.attack.multi_turn.simulated_conversation import (
     SimulatedConversationResult,
     _generate_next_message_async,
@@ -504,10 +508,13 @@ class TestGenerateSimulatedConversationAsync:
                 return_value=AttackResult(
                     conversation_id=preparation_id,
                     objective="Test objective",
-                    outcome=AttackOutcome.FAILURE,
+                    outcome=AttackOutcome.UNDETERMINED,
                     outcome_reason=failure_reason,
                     related_conversations={adversarial_reference},
-                    metadata={"adversarial_chat_blocked": True},
+                    metadata=AttackPreparationFailure(
+                        kind=AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED,
+                        reason=failure_reason,
+                    ).to_metadata(),
                 )
             )
             mock_attack_class.return_value = mock_attack
@@ -532,6 +539,50 @@ class TestGenerateSimulatedConversationAsync:
             (adversarial_id, ConversationType.ADVERSARIAL),
         }
         mock_generate_next.assert_not_awaited()
+
+    async def test_adversarial_block_without_outcome_reason_still_reports_a_reason(
+        self,
+        mock_adversarial_chat: MagicMock,
+        mock_objective_scorer: MagicMock,
+        adversarial_system_prompt_path: Path,
+    ) -> None:
+        with (
+            patch("pyrit.executor.attack.multi_turn.simulated_conversation.RedTeamingAttack") as mock_attack_class,
+            patch(
+                "pyrit.executor.attack.multi_turn.simulated_conversation._generate_next_message_async",
+                new_callable=AsyncMock,
+            ),
+            patch("pyrit.executor.attack.multi_turn.simulated_conversation.CentralMemory") as mock_memory_class,
+        ):
+            mock_attack = MagicMock()
+            mock_attack.execute_async = AsyncMock(
+                return_value=AttackResult(
+                    conversation_id=str(uuid.uuid4()),
+                    objective="Test objective",
+                    outcome=AttackOutcome.UNDETERMINED,
+                    outcome_reason=None,
+                    metadata={
+                        AttackPreparationFailure.METADATA_KEY: (
+                            AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED.value
+                        )
+                    },
+                )
+            )
+            mock_attack_class.return_value = mock_attack
+            mock_memory = MagicMock()
+            mock_memory.get_conversation_messages.return_value = iter([])
+            mock_memory_class.get_memory_instance.return_value = mock_memory
+
+            result = await generate_simulated_conversation_async(
+                objective="Test objective",
+                adversarial_chat=mock_adversarial_chat,
+                objective_scorer=mock_objective_scorer,
+                adversarial_chat_system_prompt_path=adversarial_system_prompt_path,
+                next_message_system_prompt_path=NextMessageSystemPromptPaths.DIRECT.value,
+            )
+
+        assert result.seed_prompts == []
+        assert result.preparation_failure_reason
 
     async def test_final_prompt_block_is_returned_as_preparation_failure(
         self,

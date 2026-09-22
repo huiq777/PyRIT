@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import ast
 import logging
 import uuid
 from functools import cache
@@ -134,12 +135,9 @@ class AdversarialBenchmark(Scenario):
     #: available; they should not abort the objective or be interpreted as failure.
     RAISE_IF_DEFAULT_SCORER_BLOCKS: ClassVar[bool] = False
 
-    _TAP_PARAMETER_MAP: ClassVar[tuple[tuple[str, str], ...]] = (
-        ("tap_tree_width", "tree_width"),
-        ("tap_tree_depth", "tree_depth"),
-        ("tap_branching_factor", "branching_factor"),
-        ("tap_batch_size", "batch_size"),
-    )
+    #: Separator between the technique name and the constructor argument in a
+    #: ``technique_args`` entry, e.g. ``tap.tree_width=3``.
+    TECHNIQUE_ARG_SEPARATOR: ClassVar[str] = "."
 
     @classmethod
     def _get_additional_scoring_questions(cls) -> list[Path]:
@@ -190,29 +188,15 @@ class AdversarialBenchmark(Scenario):
                 default=None,
             ),
             Parameter(
-                name="tap_tree_width",
-                description="Override TAP's retained tree width. Leave unset to use the registered technique default.",
-                param_type=int,
-                default=None,
-            ),
-            Parameter(
-                name="tap_tree_depth",
-                description="Override TAP's maximum tree depth. Leave unset to use the registered technique default.",
-                param_type=int,
-                default=None,
-            ),
-            Parameter(
-                name="tap_branching_factor",
-                description="Override TAP's branching factor. Leave unset to use the registered technique default.",
-                param_type=int,
-                default=None,
-            ),
-            Parameter(
-                name="tap_batch_size",
+                name="technique_args",
                 description=(
-                    "Override TAP's internal node batch size. Leave unset to use the registered technique default."
+                    "Override constructor arguments on any selected attack technique. "
+                    "Each entry is '<technique>.<argument>=<value>', e.g. "
+                    "--technique-args tap.tree_width=3 tap.tree_depth=4. Values are parsed as "
+                    "Python literals when possible (3, 0.5, true) and treated as strings otherwise. "
+                    "Leave unset to use the registered technique defaults."
                 ),
-                param_type=int,
+                param_type=list[str],
                 default=None,
             ),
         ]
@@ -248,7 +232,6 @@ class AdversarialBenchmark(Scenario):
         self._use_cached: bool = use_cached
         self._precomputed_cached_results: dict[str, list[AttackResult]] = {}
         self._cached_results_by_name: dict[str, list[AttackResult]] = {}
-        self._initial_objective_hashes: list[str] = []
 
         technique_class = _build_benchmark_technique()
 
@@ -375,7 +358,7 @@ class AdversarialBenchmark(Scenario):
         selected_groups, datasets = await self._resolve_dataset_groups_for_estimate_async()
         factories = resolve_technique_factories_for_techniques(
             scenario_techniques=self._scenario_techniques,
-            extra_factories=self._get_tap_factory_override(),
+            extra_factories=self._get_technique_factory_overrides(),
         )
         per_target_components: list[ScenarioRunSizeComponent] = []
         for technique in self._scenario_techniques:
@@ -503,7 +486,7 @@ class AdversarialBenchmark(Scenario):
         resolved_targets = self._resolve_adversarial_targets(target_names=target_names)
         technique_factories = resolve_technique_factories(
             context=context,
-            extra_factories=self._get_tap_factory_override(),
+            extra_factories=self._get_technique_factory_overrides(),
         )
 
         builder = MatrixAtomicAttackBuilder(
@@ -522,10 +505,6 @@ class AdversarialBenchmark(Scenario):
             display_group_fn=lambda combo: combo.target_name or "",
             include_baseline=context.include_baseline,
         )
-        self._initial_objective_hashes = list(
-            dict.fromkeys(to_sha256(objective) for attack in atomic_attacks for objective in attack.objectives)
-        )
-
         self._use_cached = self._is_cache_reuse_enabled()
         if not self._use_cached or self._scenario_result_id:
             return atomic_attacks
@@ -533,38 +512,98 @@ class AdversarialBenchmark(Scenario):
         self._apply_reusable_cached_results(atomic_attacks=atomic_attacks)
         return atomic_attacks
 
-    def _get_tap_factory_override(self) -> dict[str, AttackTechniqueFactory] | None:
+    def _get_technique_factory_overrides(self) -> dict[str, AttackTechniqueFactory] | None:
         """
-        Build a scenario-local TAP factory when search parameters are overridden.
+        Build scenario-local factories for techniques whose constructor args were overridden.
+
+        Keeps the scenario technique-agnostic: it parses ``technique_args`` entries, groups
+        them by technique name, and delegates both the merge and the argument validation to
+        ``AttackTechniqueFactory.with_attack_kwargs``.
 
         Returns:
-            dict[str, AttackTechniqueFactory] | None: A TAP factory override, or
-                ``None`` when the registered TAP defaults should remain unchanged.
+            dict[str, AttackTechniqueFactory] | None: Overridden factories keyed by technique
+                name, or ``None`` when no overrides were supplied.
+
+        Raises:
+            ValueError: If an entry is malformed or names an unregistered technique.
+            TypeError: If an argument is not accepted by the technique's attack constructor.
         """
-        attack_kwargs = {
-            attack_parameter: self.params[scenario_parameter]
-            for scenario_parameter, attack_parameter in self._TAP_PARAMETER_MAP
-            if self.params.get(scenario_parameter) is not None
-        }
-        if not attack_kwargs:
+        kwargs_by_technique = self._parse_technique_args(entries=self.params.get("technique_args"))
+        if not kwargs_by_technique:
             return None
 
-        registered_factory = AttackTechniqueRegistry.get_registry_singleton().get_factories_or_raise().get("tap")
-        return (
-            {"tap": registered_factory.with_attack_kwargs(attack_kwargs=attack_kwargs)} if registered_factory else None
-        )
+        registered_factories = AttackTechniqueRegistry.get_registry_singleton().get_factories_or_raise()
+        unknown = sorted(set(kwargs_by_technique) - set(registered_factories))
+        if unknown:
+            raise ValueError(
+                f"AdversarialBenchmark: --technique-args names unregistered techniques {unknown}. "
+                f"Registered techniques: {sorted(registered_factories)}."
+            )
 
-    def _build_initial_scenario_metadata(self) -> dict[str, Any]:
+        return {
+            technique: registered_factories[technique].with_attack_kwargs(attack_kwargs=attack_kwargs)
+            for technique, attack_kwargs in kwargs_by_technique.items()
+        }
+
+    @classmethod
+    def _parse_technique_args(cls, *, entries: list[str] | None) -> dict[str, dict[str, Any]]:
         """
-        Preserve the sampled objective set before cross-run cache pruning.
+        Parse ``<technique>.<argument>=<value>`` entries into per-technique constructor kwargs.
+
+        Args:
+            entries (list[str] | None): Raw ``technique_args`` values.
 
         Returns:
-            dict[str, Any]: Scenario metadata with the complete sampled objective set.
+            dict[str, dict[str, Any]]: Constructor kwargs keyed by technique name.
+
+        Raises:
+            ValueError: If an entry does not match ``<technique>.<argument>=<value>`` or
+                repeats an argument for the same technique with a different value.
         """
-        metadata = super()._build_initial_scenario_metadata()
-        if getattr(self._dataset_config, "max_dataset_size", None) is not None:
-            metadata["objective_hashes"] = list(self._initial_objective_hashes)
-        return metadata
+        kwargs_by_technique: dict[str, dict[str, Any]] = {}
+        for entry in entries or []:
+            target, separator, raw_value = entry.partition("=")
+            technique, name_separator, argument = target.partition(cls.TECHNIQUE_ARG_SEPARATOR)
+            if not (separator and name_separator and technique and argument):
+                raise ValueError(
+                    f"AdversarialBenchmark: invalid --technique-args entry {entry!r}. "
+                    f"Expected '<technique>{cls.TECHNIQUE_ARG_SEPARATOR}<argument>=<value>', "
+                    f"e.g. 'tap{cls.TECHNIQUE_ARG_SEPARATOR}tree_width=3'."
+                )
+            value = cls._parse_technique_arg_value(raw_value)
+            existing = kwargs_by_technique.setdefault(technique, {})
+            if argument in existing and existing[argument] != value:
+                raise ValueError(
+                    f"AdversarialBenchmark: --technique-args sets '{technique}"
+                    f"{cls.TECHNIQUE_ARG_SEPARATOR}{argument}' more than once with different values."
+                )
+            existing[argument] = value
+        return kwargs_by_technique
+
+    @staticmethod
+    def _parse_technique_arg_value(raw_value: str) -> Any:
+        """
+        Coerce a CLI-supplied argument value to its Python type.
+
+        Booleans use the repository's textual convention (``true``/``false``, case-insensitive)
+        rather than Python's ``True``/``False`` so operators write the same forms they use for
+        declared boolean parameters. Numeric and ``None`` literals are read with
+        ``ast.literal_eval``; anything else stays a string.
+
+        Args:
+            raw_value (str): The text after ``=`` in a ``technique_args`` entry.
+
+        Returns:
+            Any: An int, float, bool, or None when the text denotes one, otherwise the string.
+        """
+        text = raw_value.strip()
+        if text.lower() in ("true", "false"):
+            return text.lower() == "true"
+        try:
+            literal = ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return raw_value
+        return literal if isinstance(literal, (int, float, type(None))) and not isinstance(literal, bool) else raw_value
 
     def _resolve_adversarial_targets(self, *, target_names: list[str]) -> list[tuple[str, PromptTarget]]:
         """
@@ -855,13 +894,24 @@ class AdversarialBenchmark(Scenario):
             lookup_hashes_by_name[attack.atomic_attack_name] = {value for value in lookup_hashes if value}
 
         # One DB query per unique hash (deduplication), results stored temporarily by hash.
+        # A restored cache artifact can be corrupt or schema-drifted, and cache reuse is only
+        # an optimization, so a read failure discards every partial lookup and degrades the
+        # run to a cold one. Identifier construction above is deliberately outside the guard:
+        # a failure there is a programming error, not bad cache data.
         raw_results_by_hash: dict[str, list[AttackResult]] = {}
-        for technique_eval_hash in set().union(*lookup_hashes_by_name.values()) if lookup_hashes_by_name else set():
-            raw_results_by_hash[technique_eval_hash] = get_cached_results_for_technique(
-                self._memory,
-                technique_eval_hash=technique_eval_hash,
-                objective_target_eval_hash=objective_target_eval_hash,
+        try:
+            for technique_eval_hash in set().union(*lookup_hashes_by_name.values()) if lookup_hashes_by_name else set():
+                raw_results_by_hash[technique_eval_hash] = get_cached_results_for_technique(
+                    self._memory,
+                    technique_eval_hash=technique_eval_hash,
+                    objective_target_eval_hash=objective_target_eval_hash,
+                )
+        except Exception as e:
+            logger.warning(
+                f"AdversarialBenchmark: cached-result lookup failed ({e!s}); running without cache reuse for this run."
             )
+            self._cached_results_by_name = {}
+            return set()
 
         # Per-attack attribution filter: only count results that were produced for this
         # specific atomic_attack_name slot (dataset-level scoping via parent_collection).

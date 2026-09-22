@@ -9,6 +9,7 @@ AtomicAttack instances sequentially, enabling comprehensive security testing cam
 """
 
 import asyncio
+import copy
 import logging
 import uuid
 from abc import ABC, abstractmethod
@@ -55,6 +56,7 @@ from pyrit.scenario.core.scenario_context import ScenarioContext
 from pyrit.scenario.core.scenario_target_defaults import get_default_scorer_target
 from pyrit.scenario.core.scenario_technique import ScenarioTechnique
 from pyrit.score import (
+    MessageScorer,
     Scorer,
     SelfAskRefusalScorer,
     SelfAskTrueFalseScorer,
@@ -460,7 +462,7 @@ class Scenario(ABC):
                 f"Using registry default objective scorer: {type(registry_default_scorer).__name__} "
                 f"with chat target: {type(chat_target).__name__ if chat_target else 'None'}"
             )
-            return registry_default_scorer
+            return self._apply_scorer_block_policy(scorer=registry_default_scorer)
 
         refusal_scorer = SelfAskRefusalScorer(chat_target=chat_target)
         refusal_scorer.raise_if_scorer_blocks = self.RAISE_IF_DEFAULT_SCORER_BLOCKS
@@ -470,6 +472,30 @@ class Scenario(ABC):
             f"with chat target: {type(chat_target).__name__ if chat_target else 'None'}"
         )
         return scorer
+
+    def _apply_scorer_block_policy(self, *, scorer: TrueFalseScorer) -> TrueFalseScorer:
+        """
+        Apply ``RAISE_IF_DEFAULT_SCORER_BLOCKS`` to a scorer this scenario did not construct.
+
+        The registry default scorer is a shared singleton handed to every scenario, so the
+        policy is applied to a shallow copy rather than by mutating the instance. The copy
+        keeps sharing the chat target and other collaborators, which is what callers expect;
+        only the block policy differs.
+
+        Args:
+            scorer (TrueFalseScorer): The scorer to apply the policy to.
+
+        Returns:
+            TrueFalseScorer: ``scorer`` unchanged when it already matches the policy or
+            cannot express it, otherwise an independent copy carrying the policy.
+        """
+        if not isinstance(scorer, MessageScorer):
+            return scorer
+        if scorer.raise_if_scorer_blocks == self.RAISE_IF_DEFAULT_SCORER_BLOCKS:
+            return scorer
+        scoped_scorer = copy.copy(scorer)
+        scoped_scorer.raise_if_scorer_blocks = self.RAISE_IF_DEFAULT_SCORER_BLOCKS
+        return scoped_scorer
 
     def set_params_from_args(self, *, args: dict[str, Any]) -> None:
         """
@@ -1312,7 +1338,10 @@ class Scenario(ABC):
         try:
             rows = self._memory.get_attack_results(scenario_result_id=self._scenario_result_id)
             for row in rows:
-                if row.outcome == AttackOutcome.ERROR:
+                # ERROR rows hit infrastructure problems and UNDETERMINED rows never reached a
+                # verdict (e.g. the adversarial chat was blocked before any prompt was sent).
+                # Neither measured the objective, so both stay pending for the next resume.
+                if row.outcome in (AttackOutcome.ERROR, AttackOutcome.UNDETERMINED):
                     continue
                 if row.attribution_data is None:
                     continue

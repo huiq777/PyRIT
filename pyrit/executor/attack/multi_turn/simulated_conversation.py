@@ -24,10 +24,8 @@ from pyrit.executor.attack.core.attack_config import (
     AttackConverterConfig,
     AttackScoringConfig,
 )
-from pyrit.executor.attack.multi_turn.red_teaming import (
-    ADVERSARIAL_CHAT_BLOCKED_METADATA_KEY,
-    RedTeamingAttack,
-)
+from pyrit.executor.attack.core.attack_preparation import AttackPreparationFailure
+from pyrit.executor.attack.multi_turn.red_teaming import RedTeamingAttack
 from pyrit.memory import CentralMemory
 from pyrit.message_normalizer import ConversationContextNormalizer
 from pyrit.models import (
@@ -180,9 +178,8 @@ async def generate_simulated_conversation_async(
         *result.related_conversations,
     }
 
-    preparation_failure_reason = None
-    if result.metadata.get(ADVERSARIAL_CHAT_BLOCKED_METADATA_KEY):
-        preparation_failure_reason = result.outcome_reason
+    preparation_failure = AttackPreparationFailure.from_result(result=result)
+    preparation_failure_reason = preparation_failure.reason if preparation_failure else None
 
     # If next_message_system_prompt_path is provided, generate a final user message
     if next_message_system_prompt_path and preparation_failure_reason is None:

@@ -4,6 +4,7 @@
 """Tests for the scenarios.Scenario class."""
 
 import asyncio
+import functools
 from typing import ClassVar
 from unittest.mock import ANY, AsyncMock, MagicMock, PropertyMock, patch
 
@@ -1099,7 +1100,7 @@ class TestGetDefaultObjectiveScorer:
 
     @patch("pyrit.scenario.core.scenario.ScorerRegistry")
     def test_returns_registry_scorer_when_tagged(self, mock_registry_cls) -> None:
-        """Test that a tagged scorer from the registry is returned."""
+        """A tagged registry scorer that cannot express the block policy is returned unchanged."""
         from pyrit.score import TrueFalseScorer
 
         mock_scorer = MagicMock(spec=TrueFalseScorer)
@@ -1114,10 +1115,60 @@ class TestGetDefaultObjectiveScorer:
 
         # Mock self with _get_additional_scoring_questions returning empty sequence
         mock_self = MagicMock()
+        mock_self.RAISE_IF_DEFAULT_SCORER_BLOCKS = True
+        mock_self._apply_scorer_block_policy = functools.partial(Scenario._apply_scorer_block_policy, mock_self)
         type(mock_self)._get_additional_scoring_questions = classmethod(lambda cls: [])
 
         result = Scenario._get_default_objective_scorer(mock_self)
         assert result is mock_scorer
+
+    @pytest.mark.parametrize("raise_if_blocks", [True, False])
+    @patch("pyrit.scenario.core.scenario.get_default_scorer_target")
+    @patch("pyrit.scenario.core.scenario.ScorerRegistry")
+    def test_registry_scorer_gets_block_policy_without_mutating_shared_instance(
+        self, mock_registry_cls, mock_get_scorer_target, raise_if_blocks: bool
+    ) -> None:
+        """The registry default is a shared singleton, so the policy must land on a copy."""
+        from pyrit.score import SubStringScorer
+
+        registry_scorer = SubStringScorer(substring="unused")
+        registry_scorer.raise_if_scorer_blocks = not raise_if_blocks
+
+        mock_entry = MagicMock()
+        mock_entry.instance = registry_scorer
+
+        mock_registry = MagicMock()
+        mock_registry.instances.get_by_tag.return_value = [mock_entry]
+        mock_registry_cls.get_registry_singleton.return_value = mock_registry
+
+        mock_self = MagicMock()
+        mock_self.RAISE_IF_DEFAULT_SCORER_BLOCKS = raise_if_blocks
+        mock_self._apply_scorer_block_policy = functools.partial(Scenario._apply_scorer_block_policy, mock_self)
+        type(mock_self)._get_additional_scoring_questions = classmethod(lambda cls: [])
+
+        result = Scenario._get_default_objective_scorer(mock_self)
+
+        assert result is not registry_scorer
+        assert result.raise_if_scorer_blocks is raise_if_blocks
+        assert registry_scorer.raise_if_scorer_blocks is (not raise_if_blocks)
+
+    @pytest.mark.parametrize("raise_if_blocks", [True, False])
+    @patch("pyrit.scenario.core.scenario.get_default_scorer_target")
+    @patch("pyrit.scenario.core.scenario.ScorerRegistry")
+    def test_fallback_scorer_carries_block_policy(
+        self, mock_registry_cls, mock_get_scorer_target, raise_if_blocks: bool
+    ) -> None:
+        """With no registered default, the constructed fallback still honors the policy."""
+        mock_registry = MagicMock()
+        mock_registry.instances.get_by_tag.return_value = []
+        mock_registry_cls.get_registry_singleton.return_value = mock_registry
+
+        mock_self = MagicMock()
+        mock_self.RAISE_IF_DEFAULT_SCORER_BLOCKS = raise_if_blocks
+        type(mock_self)._get_additional_scoring_questions = classmethod(lambda cls: [])
+
+        result = Scenario._get_default_objective_scorer(mock_self)
+        assert result._scorer.raise_if_scorer_blocks is raise_if_blocks
 
     @patch("pyrit.scenario.core.scenario.get_default_scorer_target")
     @patch("pyrit.scenario.core.scenario.ScorerRegistry")

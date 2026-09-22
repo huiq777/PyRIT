@@ -22,6 +22,10 @@ from pyrit.executor.attack import (
 )
 from pyrit.executor.attack.component import ConversationManager, PrependedConversationConfig
 from pyrit.executor.attack.core.attack_config import DEFAULT_ADVERSARIAL_FIRST_MESSAGE
+from pyrit.executor.attack.core.attack_preparation import (
+    AttackPreparationFailure,
+    AttackPreparationFailureKind,
+)
 from pyrit.executor.attack.core.attack_strategy import _ObjectiveTargetConversationLifecycle
 from pyrit.memory import CentralMemory
 from pyrit.message_normalizer import MessageStringNormalizer
@@ -1109,7 +1113,7 @@ class TestResponseScoring:
 class TestAttackExecution:
     """Tests for the main attack execution logic."""
 
-    async def test_adversarial_chat_block_is_completed_failure(
+    async def test_adversarial_chat_block_is_undetermined_not_a_measured_failure(
         self,
         mock_objective_target: MagicMock,
         mock_adversarial_chat: MagicMock,
@@ -1142,18 +1146,21 @@ class TestAttackExecution:
         ):
             result = await attack.execute_async(objective="Test objective")
 
-        assert result.outcome is AttackOutcome.FAILURE
+        assert result.outcome is AttackOutcome.UNDETERMINED
         assert result.executed_turns == 0
         assert result.last_response is None
         assert result.automated_score is None
-        assert result.metadata["adversarial_chat_blocked"] is True
+        preparation_failure = AttackPreparationFailure.from_result(result=result)
+        assert preparation_failure is not None
+        assert preparation_failure.kind is AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED
+        assert preparation_failure.reason
         assert len(result.related_conversations) == 1
         assert next(iter(result.related_conversations)).conversation_type is ConversationType.ADVERSARIAL
         assert "Adversarial chat blocked" in (result.outcome_reason or "")
         mock_send.assert_not_awaited()
         [persisted_result] = CentralMemory.get_memory_instance().get_attack_results(objective="Test objective")
-        assert persisted_result.outcome is AttackOutcome.FAILURE
-        assert persisted_result.metadata["adversarial_chat_blocked"] is True
+        assert persisted_result.outcome is AttackOutcome.UNDETERMINED
+        assert AttackPreparationFailure.from_result(result=persisted_result) == preparation_failure
 
     async def test_unrelated_adversarial_bad_request_still_propagates(
         self,

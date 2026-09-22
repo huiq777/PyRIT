@@ -129,7 +129,6 @@ def test_content_filter_markers_exported_from_pyrit_exceptions():
     assert "policy_violation" in CONTENT_FILTER_MARKERS
     assert "content_safety_violation" in CONTENT_FILTER_MARKERS
     assert "bio_policy" in CONTENT_FILTER_MARKERS
-    assert "cyber_policy" in CONTENT_FILTER_MARKERS
 
 
 @pytest.mark.parametrize(

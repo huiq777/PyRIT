@@ -12,6 +12,10 @@ from pyrit.exceptions import ComponentRole, execution_context
 from pyrit.executor.attack.component import ConversationManager, PrependedConversationConfig
 from pyrit.executor.attack.core.attack_config import AttackConverterConfig, AttackScoringConfig
 from pyrit.executor.attack.core.attack_parameters import AttackParameters, AttackParamsT
+from pyrit.executor.attack.core.attack_preparation import (
+    AttackPreparationFailure,
+    AttackPreparationFailureKind,
+)
 from pyrit.executor.attack.core.attack_strategy import attack_outcome_from_score
 from pyrit.executor.attack.single_turn.single_turn_attack_strategy import (
     SingleTurnAttackContext,
@@ -190,13 +194,21 @@ class PromptSendingAttack(SingleTurnAttackStrategy):
 
         preparation_failure_reason = getattr(context.params, "preparation_failure_reason", None)
         if preparation_failure_reason:
+            # Preparation never produced an attacker turn, so nothing was sent to the objective
+            # target. Record it as UNDETERMINED with the typed signal attached so downstream
+            # consumers can tell "not measured" apart from "measured and failed".
+            preparation_failure = AttackPreparationFailure(
+                kind=AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED,
+                reason=preparation_failure_reason,
+            )
             return self._create_attack_result(
                 context=context,
                 response=None,
                 score=None,
-                outcome=AttackOutcome.FAILURE,
-                outcome_reason=preparation_failure_reason,
+                outcome=AttackOutcome.UNDETERMINED,
+                outcome_reason=preparation_failure.reason,
                 executed_turns=0,
+                metadata=preparation_failure.to_metadata(),
             )
 
         # Execute with retries
@@ -270,6 +282,7 @@ class PromptSendingAttack(SingleTurnAttackStrategy):
         outcome: AttackOutcome,
         outcome_reason: str | None,
         executed_turns: int,
+        metadata: dict[str, Any] | None = None,
     ) -> AttackResult:
         """
         Create a prompt-sending result from the current context.
@@ -288,6 +301,7 @@ class PromptSendingAttack(SingleTurnAttackStrategy):
             outcome_reason=outcome_reason,
             executed_turns=executed_turns,
             labels=context.memory_labels,
+            metadata=metadata or {},
         )
 
     def _determine_attack_outcome(

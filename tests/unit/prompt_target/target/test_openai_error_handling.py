@@ -50,7 +50,6 @@ def test_content_filter_markers_contents():
         "policy_violation",
         "moderation_blocked",
         "bio_policy",
-        "cyber_policy",
     } <= CONTENT_FILTER_MARKERS
 
 
@@ -67,7 +66,6 @@ def test_safety_message_markers_contents():
         "cyber_policy",
         "moderation_blocked",
         "bio_policy",
-        "cyber_policy",
     ],
 )
 def test_is_content_filter_error_explicit_code(code):

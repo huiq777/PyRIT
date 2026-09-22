@@ -915,6 +915,30 @@ class TestGetCompletedObjectiveHashesForAttack:
         )
         assert result == {to_sha256("ok")}
 
+    def test_skips_undetermined_rows_but_keeps_measured_failures(self):
+        """An UNDETERMINED row never reached a verdict (e.g. a provider block on the
+        adversarial chat), so the objective stays pending. A measured FAILURE is a real
+        result and must count as completed."""
+        from pyrit.common.utils import to_sha256
+
+        scenario = self._make_scenario()
+        scenario._memory.get_attack_results.return_value = [
+            self._row(
+                objective="measured-failure",
+                outcome=AttackOutcome.FAILURE,
+                attribution_data={"parent_collection": "a", "parent_eval_hash": "hash-A"},
+            ),
+            self._row(
+                objective="provider-blocked",
+                outcome=AttackOutcome.UNDETERMINED,
+                attribution_data={"parent_collection": "a", "parent_eval_hash": "hash-A"},
+            ),
+        ]
+        result = scenario._get_completed_objective_hashes_for_attack(
+            atomic_attack=self._make_atomic("a"),
+        )
+        assert result == {to_sha256("measured-failure")}
+
     def test_skips_rows_without_attribution_data(self):
         from pyrit.common.utils import to_sha256
 

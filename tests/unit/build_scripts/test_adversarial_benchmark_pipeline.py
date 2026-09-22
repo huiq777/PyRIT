@@ -1,24 +1,68 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
+import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PIPELINE_PATH = REPO_ROOT / ".azuredevops" / "adversarial-benchmark.yml"
+
+_SET_VARIABLE_PATTERN = re.compile(r"task\.setvariable variable=(\w+)\]")
+_VARIABLE_REFERENCE_PATTERN = re.compile(r"\$\((benchmark\w+)\)")
 
 
 def _load_pipeline() -> dict:
     return yaml.safe_load(PIPELINE_PATH.read_text(encoding="utf-8"))
 
 
+def _steps() -> list:
+    return _load_pipeline()["jobs"][0]["steps"]
+
+
+def _step(display_name: str) -> dict:
+    return next(step for step in _steps() if step.get("displayName") == display_name)
+
+
+def _step_script(step: dict) -> str:
+    return step.get("bash") or step["inputs"]["inlineScript"]
+
+
+def _emitted_benchmark_variables() -> set[str]:
+    return set(_SET_VARIABLE_PATTERN.findall(_step_script(_step("Resolve benchmark profile"))))
+
+
+@pytest.mark.parametrize(
+    "display_name",
+    ["Run benchmark and capture result snapshot", "Collect benchmark diagnostics"],
+)
+def test_every_consumed_benchmark_variable_is_emitted_by_profile_resolution(display_name: str) -> None:
+    """Any ``$(benchmark*)`` a step reads must be set by the resolve step, or it expands empty."""
+    consumed = {
+        variable
+        for value in _step(display_name).get("env", {}).values()
+        for variable in _VARIABLE_REFERENCE_PATTERN.findall(str(value))
+    }
+
+    assert consumed, f"{display_name} is expected to consume resolved benchmark variables"
+    assert consumed <= _emitted_benchmark_variables()
+
+
+def test_run_step_reads_every_environment_variable_it_declares() -> None:
+    """A declared-but-unread env var is dead profile plumbing; an unset one expands empty."""
+    run_step = _step("Run benchmark and capture result snapshot")
+    script = _step_script(run_step)
+
+    for name in run_step["env"]:
+        assert f"${name}" in script, f"{name} is declared but never read by the run step"
+
+
 def test_benchmark_defaults_to_quick_profile_with_full_profile_available() -> None:
     pipeline = _load_pipeline()
     parameters = {parameter["name"]: parameter for parameter in pipeline["parameters"]}
-    steps = pipeline["jobs"][0]["steps"]
-    resolve_profile = next(step for step in steps if step.get("displayName") == "Resolve benchmark profile")
-    script = resolve_profile["bash"]
+    resolve_profile = _step("Resolve benchmark profile")
 
     assert resolve_profile["condition"] == "always()"
     assert parameters["benchmarkProfile"]["default"] == "quick"
@@ -30,73 +74,33 @@ def test_benchmark_defaults_to_quick_profile_with_full_profile_available() -> No
         "tapBranchingFactor",
         "tapBatchSize",
     ):
-        assert parameters[override]["default"] == 0
-    quick_profile = script[script.index("quick)") : script.index(";;", script.index("quick)"))]
-    full_profile = script[script.index("full)") : script.index(";;", script.index("full)"))]
-    assert "profile_max_dataset_size=24" in quick_profile
-    assert "profile_tap_tree_width=2" in quick_profile
-    assert "profile_tap_tree_depth=3" in quick_profile
-    assert "profile_tap_branching_factor=2" in quick_profile
-    assert "profile_tap_batch_size=2" in quick_profile
-    assert "profile_max_dataset_size=120" in full_profile
-    assert "profile_tap_tree_width=3" in full_profile
-    assert "profile_tap_tree_depth=5" in full_profile
-    assert "profile_tap_branching_factor=2" in full_profile
-    assert "profile_tap_batch_size=10" in full_profile
+        assert parameters[override]["default"] == 0, "0 is the sentinel meaning 'use the profile value'"
 
 
 def test_benchmark_cache_is_enabled_and_passed_to_scenario() -> None:
     pipeline = _load_pipeline()
     parameters = {parameter["name"]: parameter for parameter in pipeline["parameters"]}
-    run_step = next(
-        step
-        for step in pipeline["jobs"][0]["steps"]
-        if step.get("displayName") == "Run benchmark and capture result snapshot"
-    )
+    run_step = _step("Run benchmark and capture result snapshot")
 
     assert parameters["useCached"]["default"] is True
-    assert '--use-cached "$USE_CACHED_INPUT"' in run_step["inputs"]["inlineScript"]
+    assert '--use-cached "$USE_CACHED_INPUT"' in _step_script(run_step)
     assert run_step["env"]["USE_CACHED_INPUT"] == "${{ parameters.useCached }}"
 
 
-def test_benchmark_passes_profile_tap_settings_to_scenario() -> None:
-    pipeline = _load_pipeline()
-    run_step = next(
-        step
-        for step in pipeline["jobs"][0]["steps"]
-        if step.get("displayName") == "Run benchmark and capture result snapshot"
-    )
-    script = run_step["inputs"]["inlineScript"]
+def test_benchmark_passes_tap_tuning_through_the_generic_technique_args_flag() -> None:
+    """TAP tuning is pipeline policy; the scenario only sees technique-agnostic overrides."""
+    resolve_script = _step_script(_step("Resolve benchmark profile"))
+    run_script = _step_script(_step("Run benchmark and capture result snapshot"))
 
-    assert '--tap-tree-width "$TAP_TREE_WIDTH_INPUT"' in script
-    assert '--tap-tree-depth "$TAP_TREE_DEPTH_INPUT"' in script
-    assert '--tap-branching-factor "$TAP_BRANCHING_FACTOR_INPUT"' in script
-    assert '--tap-batch-size "$TAP_BATCH_SIZE_INPUT"' in script
-    assert run_step["env"]["MAX_DATASET_SIZE_INPUT"] == "$(benchmarkMaxDatasetSize)"
-    assert run_step["env"]["TAP_TREE_WIDTH_INPUT"] == "$(benchmarkTapTreeWidth)"
-    assert run_step["env"]["TAP_TREE_DEPTH_INPUT"] == "$(benchmarkTapTreeDepth)"
-    assert run_step["env"]["TAP_BRANCHING_FACTOR_INPUT"] == "$(benchmarkTapBranchingFactor)"
-    assert run_step["env"]["TAP_BATCH_SIZE_INPUT"] == "$(benchmarkTapBatchSize)"
+    for argument in ("tree_width", "tree_depth", "branching_factor", "batch_size"):
+        assert f'"tap.{argument}=' in resolve_script
 
-
-def test_benchmark_manifest_records_profile_and_effective_tap_settings() -> None:
-    pipeline = _load_pipeline()
-    diagnostics = next(
-        step for step in pipeline["jobs"][0]["steps"] if step.get("displayName") == "Collect benchmark diagnostics"
-    )
-    script = diagnostics["bash"]
-
-    assert '"benchmark_profile": os.environ["BENCHMARK_PROFILE_INPUT"]' in script
-    assert '"tap_tree_width": int(os.environ["TAP_TREE_WIDTH_INPUT"])' in script
-    assert '"tap_tree_depth": int(os.environ["TAP_TREE_DEPTH_INPUT"])' in script
-    assert '"tap_branching_factor": int(os.environ["TAP_BRANCHING_FACTOR_INPUT"])' in script
-    assert '"tap_batch_size": int(os.environ["TAP_BATCH_SIZE_INPUT"])' in script
+    assert "--technique-args" in run_script
+    assert "--tap-" not in run_script
 
 
 def test_benchmark_cache_restores_same_branch_state_including_failed_runs() -> None:
-    pipeline = _load_pipeline()
-    steps = pipeline["jobs"][0]["steps"]
-    conditional_steps = next(step for step in steps if "${{ if eq(parameters.useCached, true) }}" in step)
+    conditional_steps = next(step for step in _steps() if "${{ if eq(parameters.useCached, true) }}" in step)
     restore = conditional_steps["${{ if eq(parameters.useCached, true) }}"][0]
 
     assert restore["task"] == "DownloadPipelineArtifact@2"
@@ -109,10 +113,8 @@ def test_benchmark_cache_restores_same_branch_state_including_failed_runs() -> N
 
 
 def test_benchmark_database_is_published_even_after_failure() -> None:
-    pipeline = _load_pipeline()
-    steps = pipeline["jobs"][0]["steps"]
-    stage = next(step for step in steps if step.get("displayName") == "Stage reusable benchmark database")
-    publish = next(step for step in steps if step.get("displayName") == "Publish reusable benchmark database")
+    stage = _step("Stage reusable benchmark database")
+    publish = _step("Publish reusable benchmark database")
 
     assert stage["condition"] == "always()"
     assert "##vso[task.setvariable variable=hasBenchmarkDatabase]true" in stage["bash"]

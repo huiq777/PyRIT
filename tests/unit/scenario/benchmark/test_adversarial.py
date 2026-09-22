@@ -287,15 +287,11 @@ class TestAdversarialBenchmarkSupportedParameters:
 
         assert params["use_cached"].coerce_value(raw_value) is expected
 
-    @pytest.mark.parametrize(
-        "parameter_name",
-        ["tap_tree_width", "tap_tree_depth", "tap_branching_factor", "tap_batch_size"],
-    )
-    def test_declares_optional_tap_override(self, parameter_name: str) -> None:
+    def test_declares_generic_technique_args_override(self) -> None:
         params = {p.name: p for p in AdversarialBenchmark.supported_parameters()}
 
-        assert params[parameter_name].param_type is int
-        assert params[parameter_name].default is None
+        assert params["technique_args"].param_type == list[str]
+        assert params["technique_args"].default is None
 
 
 # ---------------------------------------------------------------------------
@@ -486,15 +482,17 @@ class TestAdversarialBenchmarkInit:
         expected_scorer_hash = ScorerEvaluationIdentifier(technique.attack._objective_scorer.get_identifier()).eval_hash
         assert AdversarialBenchmark._get_attack_scorer_eval_hash(atomic_attack=atomic_attack) == expected_scorer_hash
 
-    def test_tap_factory_override_applies_search_parameters_and_changes_identity(self) -> None:
+    def test_technique_args_override_applies_kwargs_and_changes_identity(self) -> None:
         bench = AdversarialBenchmark(objective_scorer=MagicMock(spec=TrueFalseScorer))
         bench.params = {
-            "tap_tree_width": 2,
-            "tap_tree_depth": 3,
-            "tap_branching_factor": 2,
-            "tap_batch_size": 2,
+            "technique_args": [
+                "tap.tree_width=2",
+                "tap.tree_depth=3",
+                "tap.branching_factor=2",
+                "tap.batch_size=2",
+            ]
         }
-        override = bench._get_tap_factory_override()
+        override = bench._get_technique_factory_overrides()
         assert override is not None
         registered_factory = AttackTechniqueRegistry.get_registry_singleton().get_factories_or_raise()["tap"]
         assert override["tap"].description == registered_factory.description
@@ -514,14 +512,10 @@ class TestAdversarialBenchmarkInit:
         )
         scoring_config = AttackScoringConfig(objective_scorer=MagicMock(spec=TrueFalseScorer))
 
-        default_technique = (
-            AttackTechniqueRegistry.get_registry_singleton()
-            .get_factories_or_raise()["tap"]
-            .create(
-                objective_target=objective_target,
-                attack_scoring_config=scoring_config,
-                adversarial_chat=adversarial_target,
-            )
+        default_technique = registered_factory.create(
+            objective_target=objective_target,
+            attack_scoring_config=scoring_config,
+            adversarial_chat=adversarial_target,
         )
         quick_technique = override["tap"].create(
             objective_target=objective_target,
@@ -542,11 +536,63 @@ class TestAdversarialBenchmarkInit:
         )
         assert quick_identity.eval_hash != default_identity.eval_hash
 
-    def test_tap_factory_override_is_absent_when_parameters_are_unset(self) -> None:
+    def test_technique_args_override_is_absent_when_parameter_is_unset(self) -> None:
         bench = AdversarialBenchmark(objective_scorer=MagicMock(spec=TrueFalseScorer))
         bench.params = {}
 
-        assert bench._get_tap_factory_override() is None
+        assert bench._get_technique_factory_overrides() is None
+
+    def test_technique_args_are_not_limited_to_tap(self) -> None:
+        """The scenario dispatches to any registered technique, so it stays technique-agnostic."""
+        bench = AdversarialBenchmark(objective_scorer=MagicMock(spec=TrueFalseScorer))
+        bench.params = {"technique_args": ["crescendo_simulated.max_attempts_on_failure=1"]}
+
+        override = bench._get_technique_factory_overrides()
+
+        assert override is not None
+        assert set(override) == {"crescendo_simulated"}
+
+    @pytest.mark.parametrize(
+        "entries, expected",
+        [
+            (["tap.tree_width=3"], {"tap": {"tree_width": 3}}),
+            (["tap.temperature=0.5"], {"tap": {"temperature": 0.5}}),
+            (["tap.desired_response_prefix=Sure,"], {"tap": {"desired_response_prefix": "Sure,"}}),
+            (["x.flag=true", "x.off=FALSE", "x.other=None"], {"x": {"flag": True, "off": False, "other": None}}),
+            (["x.count=1"], {"x": {"count": 1}}),
+            (["tap.tree_width=3", "tap.tree_width=3"], {"tap": {"tree_width": 3}}),
+            ([], {}),
+            (None, {}),
+        ],
+    )
+    def test_parse_technique_args_coerces_values(self, entries, expected) -> None:
+        assert AdversarialBenchmark._parse_technique_args(entries=entries) == expected
+
+    @pytest.mark.parametrize(
+        "entry",
+        ["tree_width=3", "tap.tree_width", "tap.=3", ".tree_width=3", ""],
+    )
+    def test_parse_technique_args_rejects_malformed_entries(self, entry: str) -> None:
+        with pytest.raises(ValueError, match="invalid --technique-args entry"):
+            AdversarialBenchmark._parse_technique_args(entries=[entry])
+
+    def test_parse_technique_args_rejects_conflicting_repeats(self) -> None:
+        with pytest.raises(ValueError, match="more than once with different values"):
+            AdversarialBenchmark._parse_technique_args(entries=["tap.tree_width=3", "tap.tree_width=4"])
+
+    def test_technique_args_override_rejects_unregistered_technique(self) -> None:
+        bench = AdversarialBenchmark(objective_scorer=MagicMock(spec=TrueFalseScorer))
+        bench.params = {"technique_args": ["not_a_technique.tree_width=3"]}
+
+        with pytest.raises(ValueError, match="unregistered techniques"):
+            bench._get_technique_factory_overrides()
+
+    def test_technique_args_override_rejects_unknown_attack_kwarg(self) -> None:
+        bench = AdversarialBenchmark(objective_scorer=MagicMock(spec=TrueFalseScorer))
+        bench.params = {"technique_args": ["tap.not_a_real_argument=3"]}
+
+        with pytest.raises(TypeError, match="not_a_real_argument"):
+            bench._get_technique_factory_overrides()
 
 
 # ---------------------------------------------------------------------------
@@ -996,7 +1042,8 @@ class TestCollectCachedCompletionPairs:
         assert cached == set()
         analytics_mock.assert_not_called()
 
-    def test_analytics_lookup_exception_is_not_silently_treated_as_cache_miss(self):
+    def test_analytics_lookup_failure_degrades_to_cold_run(self, caplog):
+        """A corrupt/unreadable cache must not abort the run: reuse is only an optimization."""
         bench = self._make_bench()
         candidates = [
             self._make_candidate(technique_eval_hash="hash_a", atomic_attack_name="attack_a"),
@@ -1006,9 +1053,45 @@ class TestCollectCachedCompletionPairs:
         with (
             self._patch_identifier(),
             patch(self._ANALYTICS_PATH, side_effect=RuntimeError("analytics blew up")),
-            pytest.raises(RuntimeError, match="analytics blew up"),
+            caplog.at_level(logging.WARNING),
         ):
-            bench._collect_cached_completion_pairs(atomic_attacks=candidates)
+            cached = bench._collect_cached_completion_pairs(atomic_attacks=candidates)
+
+        assert cached == set()
+        assert bench._cached_results_by_name == {}
+        assert "cached-result lookup failed" in caplog.text
+
+    def test_analytics_lookup_failure_after_partial_success_discards_partial_state(self, caplog):
+        """A failure on the second lookup must not leave the first lookup's hits reusable."""
+        bench = self._make_bench()
+        candidates = [
+            self._make_candidate(technique_eval_hash="hash_a", atomic_attack_name="attack_a"),
+            self._make_candidate(technique_eval_hash="hash_b", atomic_attack_name="attack_b"),
+        ]
+        bench._cached_results_by_name = {
+            "stale": [_make_attack_result_with_outcome(AttackOutcome.SUCCESS)],
+        }
+
+        def _lookup(*args, **kwargs):
+            if kwargs["technique_eval_hash"] == "hash_b":
+                raise RuntimeError("analytics blew up")
+            return [
+                _make_attack_result_with_attribution(
+                    outcome=AttackOutcome.SUCCESS,
+                    parent_collection="attack_a",
+                )
+            ]
+
+        with (
+            self._patch_identifier(),
+            patch(self._ANALYTICS_PATH, side_effect=_lookup),
+            caplog.at_level(logging.WARNING),
+        ):
+            cached = bench._collect_cached_completion_pairs(atomic_attacks=candidates)
+
+        assert cached == set()
+        assert bench._cached_results_by_name == {}
+        assert "cached-result lookup failed" in caplog.text
 
     def test_identifier_construction_failure_is_not_silently_treated_as_cache_miss(self):
         bench = self._make_bench()
@@ -1246,23 +1329,6 @@ class TestSkipCachedFilter:
             await _build_atomic_attacks(bench)
 
         assert bench._precomputed_cached_results == {"red_teaming__adv_a_harmbench": [matching]}
-
-    async def test_cache_pruning_preserves_complete_sampled_objective_metadata(self):
-        bench = self._make_bench(use_cached=True)
-        bench._dataset_config.max_dataset_size = 1
-        cached_attack = _make_attack_result_with_attribution(
-            outcome=AttackOutcome.SUCCESS,
-            parent_collection="red_teaming__adv_a_harmbench",
-        )
-
-        with patch.object(
-            bench,
-            "_collect_reusable_cached_results",
-            return_value={"red_teaming__adv_a_harmbench": [cached_attack]},
-        ):
-            await _build_atomic_attacks(bench)
-
-        assert bench._build_initial_scenario_metadata()["objective_hashes"] == [to_sha256("skip_cached_objective")]
 
     async def test_resume_uses_scenario_results_instead_of_cross_run_cache(self):
         bench = self._make_bench(use_cached=True)

@@ -21,6 +21,10 @@ from pyrit.executor.attack import (
     RTASystemPromptPaths,
     SingleTurnAttackContext,
 )
+from pyrit.executor.attack.core.attack_preparation import (
+    AttackPreparationFailure,
+    AttackPreparationFailureKind,
+)
 from pyrit.executor.attack.multi_turn.simulated_conversation import SimulatedConversationResult
 from pyrit.memory import CentralMemory
 from pyrit.message_normalizer import TokenizerTemplateNormalizer
@@ -1343,15 +1347,19 @@ class TestEdgeCasesAndErrorHandling:
 
         result = await attack._perform_async(context=context)
 
-        assert result.outcome is AttackOutcome.FAILURE
+        assert result.outcome is AttackOutcome.UNDETERMINED
         assert result.outcome_reason == failure_reason
         assert result.executed_turns == 0
         assert result.last_response is None
         assert result.related_conversations == context.related_conversations
+        preparation_failure = AttackPreparationFailure.from_result(result=result)
+        assert preparation_failure is not None
+        assert preparation_failure.kind is AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED
+        assert preparation_failure.reason == failure_reason
         mock_prompt_normalizer.send_prompt_async.assert_not_awaited()
 
     @patch("pyrit.executor.attack.multi_turn.simulated_conversation.generate_simulated_conversation_async")
-    async def test_executor_completes_simulated_preparation_block_as_failure(
+    async def test_executor_completes_simulated_preparation_block_as_undetermined(
         self,
         mock_generate: AsyncMock,
         mock_target: MagicMock,
@@ -1397,14 +1405,17 @@ class TestEdgeCasesAndErrorHandling:
         assert executor_result.incomplete_objectives == []
         assert len(executor_result.completed_results) == 1
         result = executor_result.completed_results[0]
-        assert result.outcome is AttackOutcome.FAILURE
+        assert result.outcome is AttackOutcome.UNDETERMINED
         assert result.outcome_reason == failure_reason
         assert result.executed_turns == 0
         assert {reference.conversation_id for reference in result.related_conversations} == {"preparation-1"}
         mock_prompt_normalizer.send_prompt_async.assert_not_awaited()
         [persisted_result] = CentralMemory.get_memory_instance().get_attack_results(objective="Test objective")
-        assert persisted_result.outcome is AttackOutcome.FAILURE
+        assert persisted_result.outcome is AttackOutcome.UNDETERMINED
         assert persisted_result.related_conversations == result.related_conversations
+        persisted_failure = AttackPreparationFailure.from_result(result=persisted_result)
+        assert persisted_failure is not None
+        assert persisted_failure.kind is AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED
 
     @pytest.mark.parametrize("max_attempts", [0, 1, 5])
     async def test_perform_attack_with_various_max_attempts(
