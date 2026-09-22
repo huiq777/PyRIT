@@ -2219,6 +2219,7 @@ class TestModalityRouterIntegration:
             attack._validate_context(context=basic_context)
 
 
+@pytest.mark.usefixtures("patch_central_database")
 class TestRedTeamingAdversarialIdentity:
     """Tests for adversarial config in the RedTeaming attack identity and inline system prompt."""
 
