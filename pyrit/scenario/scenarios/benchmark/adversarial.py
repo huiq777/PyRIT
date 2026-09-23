@@ -229,7 +229,6 @@ class AdversarialBenchmark(Scenario):
             objective_scorer if objective_scorer else self._get_default_objective_scorer()
         )
         self._constructor_use_cached: bool = use_cached
-        self._use_cached: bool = use_cached
         self._precomputed_cached_results: dict[str, list[AttackResult]] = {}
         self._cached_results_by_name: dict[str, list[AttackResult]] = {}
 
@@ -505,8 +504,7 @@ class AdversarialBenchmark(Scenario):
             display_group_fn=lambda combo: combo.target_name or "",
             include_baseline=context.include_baseline,
         )
-        self._use_cached = self._is_cache_reuse_enabled()
-        if not self._use_cached or self._scenario_result_id:
+        if not self._is_cache_reuse_enabled() or self._scenario_result_id:
             return atomic_attacks
 
         self._apply_reusable_cached_results(atomic_attacks=atomic_attacks)

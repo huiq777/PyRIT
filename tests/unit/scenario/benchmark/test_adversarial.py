@@ -403,16 +403,16 @@ class TestAdversarialBenchmarkInit:
         with pytest.raises(TypeError):
             AdversarialBenchmark(models=[MagicMock(spec=PromptTarget)])  # type: ignore[call-arg]
 
-    def test_skip_cached_defaults_to_false(self):
+    def test_cache_reuse_defaults_to_disabled(self):
         bench = AdversarialBenchmark(objective_scorer=MagicMock(spec=TrueFalseScorer))
-        assert bench._use_cached is False
+        assert bench._is_cache_reuse_enabled() is False
 
-    def test_skip_cached_can_be_set_true(self):
+    def test_cache_reuse_can_be_enabled_by_constructor(self):
         bench = AdversarialBenchmark(
             objective_scorer=MagicMock(spec=TrueFalseScorer),
             use_cached=True,
         )
-        assert bench._use_cached is True
+        assert bench._is_cache_reuse_enabled() is True
 
     def test_construct_without_named_default_factory_falls_back_to_all(self):
         """A pool with none of the named defaults must still construct, defaulting to ``all``."""
