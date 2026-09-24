@@ -13,6 +13,7 @@ from pyrit.executor.attack.component import ConversationManager, PrependedConver
 from pyrit.executor.attack.core.attack_config import AttackConverterConfig, AttackScoringConfig
 from pyrit.executor.attack.core.attack_parameters import AttackParameters, AttackParamsT
 from pyrit.executor.attack.core.attack_preparation import AttackPreparationFailure
+from pyrit.executor.attack.core.attack_scoring import score_attack_response_async
 from pyrit.executor.attack.core.attack_strategy import attack_outcome_from_score
 from pyrit.executor.attack.single_turn.single_turn_attack_strategy import (
     SingleTurnAttackContext,
@@ -30,7 +31,6 @@ from pyrit.models import (
 )
 from pyrit.prompt_normalizer import PromptNormalizer
 from pyrit.prompt_target import PromptTarget
-from pyrit.score import MessageScorer
 from pyrit.score.score_utils import score_is_true
 
 logger = logging.getLogger(__name__)
@@ -418,7 +418,7 @@ class PromptSendingAttack(SingleTurnAttackStrategy):
             attack_strategy_name=self.__class__.__name__,
             objective=objective,
         ):
-            scoring_results = await MessageScorer.score_response_async(
+            scoring_results = await score_attack_response_async(
                 response=response,
                 objective_scorer=self._objective_scorer,
                 auxiliary_scorers=self._auxiliary_scorers,

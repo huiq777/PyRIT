@@ -10,7 +10,6 @@ if TYPE_CHECKING:
 
 from pyrit.models import (
     ComponentIdentifier,
-    Condition,
     Scorable,
     Score,
     ScoringExpectation,
@@ -82,28 +81,9 @@ class TrueFalseInverterScorer(TrueFalseScorer):
         scoped._scorer = scoped_inner
         return scoped
 
-    def matched_conditions(self) -> frozenset[type[Condition]]:
-        """
-        Report what the wrapped scorer matches.
-
-        Returns:
-            frozenset[type[Condition]]: The condition types the wrapped scorer routes.
-        """
-        return self._scorer.matched_conditions()
-
-    def required_conditions(self) -> frozenset[type[Condition]]:
-        """
-        Report what the wrapped scorer requires.
-
-        Returns:
-            frozenset[type[Condition]]: The required condition types.
-        """
-        return self._scorer.required_conditions()
-
-    def _validate_expectation(self, *, expectation: ScoringExpectation | None) -> None:
-        """Validate wrapper and child criteria without checking sibling condition coverage."""
-        super()._validate_expectation(expectation=expectation)
-        self._scorer._validate_expectation(expectation=expectation)
+    def _get_child_scorers(self) -> tuple[Scorer, ...]:
+        """Return the scorer whose verdict is inverted."""
+        return (self._scorer,)
 
     async def _score_scorable_async(
         self,
@@ -122,7 +102,9 @@ class TrueFalseInverterScorer(TrueFalseScorer):
             list[Score]: ``[]`` when the wrapped scorer is non-applicable; otherwise, a list
                 containing its completed inverted score or unchanged undetermined score.
         """
-        scores = await self._scorer._score_nested_async(scorable=scorable, expectation=expectation)
+        scores = await self._scorer._score_nested_async(
+            scorable=scorable, expectation=self._scorer._select_expectation(expectation=expectation)
+        )
         if not scores:
             return []
         return self._invert(scores)
