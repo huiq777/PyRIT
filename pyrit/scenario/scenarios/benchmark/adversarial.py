@@ -349,7 +349,7 @@ class AdversarialBenchmark(Scenario):
     def _is_cache_reuse_enabled(self) -> bool:
         """Return the effective constructor/runtime cache setting."""
         runtime_use_cached = self.params.get("use_cached")
-        return self._constructor_use_cached if runtime_use_cached is None else runtime_use_cached
+        return self._constructor_use_cached if runtime_use_cached is None else bool(runtime_use_cached)
 
     async def _estimate_run_size_async(self) -> ScenarioRunSizeEstimate:
         """

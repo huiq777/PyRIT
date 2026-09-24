@@ -233,7 +233,7 @@ class AdversarialChatRefusedException(AdversarialChatResponseBlockedException):
     """
     Exception raised when the adversarial model itself declined to generate an attacker turn.
 
-    Subclasses :class:`AdversarialChatResponseBlockedException` because both leave the attack
+    Subclasses ``AdversarialChatResponseBlockedException`` because both leave the attack
     with no prompt to send, so existing handlers keep working. Callers that need to tell a
     deliberate model refusal apart from an infrastructure content filter can catch this first.
     """

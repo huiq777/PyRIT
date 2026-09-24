@@ -41,11 +41,7 @@ class AttackPreparationFailureKind(str, enum.Enum):
         Returns:
             str: A non-empty description of this failure kind.
         """
-        if self is AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED:
-            return "Adversarial chat was blocked by its provider before the attack could run."
-        if self is AttackPreparationFailureKind.ADVERSARIAL_CHAT_REFUSED:
-            return "Adversarial chat refused to generate an attacker turn before the attack could run."
-        return "The attack could not be prepared."
+        return _DEFAULT_REASONS[self]
 
     @classmethod
     def from_exception(cls, exception: AdversarialChatResponseBlockedException) -> AttackPreparationFailureKind:
@@ -62,6 +58,18 @@ class AttackPreparationFailureKind(str, enum.Enum):
         if isinstance(exception, AdversarialChatRefusedException):
             return cls.ADVERSARIAL_CHAT_REFUSED
         return cls.ADVERSARIAL_CHAT_BLOCKED
+
+
+#: Every kind needs an entry; a missing one raises ``KeyError`` rather than silently
+#: reusing another kind's description.
+_DEFAULT_REASONS: dict[AttackPreparationFailureKind, str] = {
+    AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED: (
+        "Adversarial chat was blocked by its provider before the attack could run."
+    ),
+    AttackPreparationFailureKind.ADVERSARIAL_CHAT_REFUSED: (
+        "Adversarial chat refused to generate an attacker turn before the attack could run."
+    ),
+}
 
 
 @dataclass(frozen=True)
