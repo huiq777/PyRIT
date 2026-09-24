@@ -89,7 +89,10 @@ class CaesarConverter(Converter):
 
     def _caesar(self, text: str) -> str:
         def shift(alphabet: str) -> str:
-            return alphabet[self.caesar_offset :] + alphabet[: self.caesar_offset]
+            # Wrap the offset per alphabet: slicing the 10 digits by an offset of 10 or more
+            # would leave them unshifted.
+            offset = self.caesar_offset % len(alphabet)
+            return alphabet[offset:] + alphabet[:offset]
 
         alphabet = (string.ascii_lowercase, string.ascii_uppercase, string.digits)
         shifted_alphabet = tuple(map(shift, alphabet))
