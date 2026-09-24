@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import logging
 import uuid
 from functools import cache
@@ -13,7 +14,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from pyrit.analytics import get_cached_results_for_technique
 from pyrit.common import apply_defaults
-from pyrit.common.path import SCORER_SEED_PROMPT_PATH
+from pyrit.common.path import EXECUTOR_SEED_PROMPT_PATH, SCORER_SEED_PROMPT_PATH
 from pyrit.common.utils import to_sha256
 from pyrit.models import (
     AttackOutcome,
@@ -26,6 +27,7 @@ from pyrit.models import (
     ScenarioRunSizeEstimateStatus,
     ScenarioRunSizeFactor,
     ScorerEvaluationIdentifier,
+    SeedPrompt,
 )
 from pyrit.models.identifiers import compute_inner_attack_eval_hash
 from pyrit.models.parameter import Parameter
@@ -52,6 +54,17 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+@cache
+def _get_benchmark_adversarial_guidance() -> str:
+    """
+    Load the static guidance prepended to every selected adversarial technique.
+
+    Returns:
+        str: The benchmark-owned cross-technique guidance.
+    """
+    return SeedPrompt.from_yaml_file(EXECUTOR_SEED_PROMPT_PATH / "benchmark" / "adversarial_guidance.yaml").value
 
 
 @cache
@@ -101,13 +114,16 @@ class AdversarialBenchmark(Scenario):
     already be registered in ``TargetRegistry`` — typically by
     ``TargetInitializer`` from ``ADVERSARIAL_CHAT_*`` env vars, or
     programmatically via ``TargetRegistry.get_registry_singleton().instances.register``.
+    Every selected adversarial technique prepends one shared benchmark guidance
+    layer to its native adversarial system prompt at creation time; global
+    factories and canonical prompt files are left unchanged.
 
     At run time, ``_build_atomic_attacks_async`` performs the
     ``(technique × adversarial_target × dataset)`` cross-product: for each
     selected adversarial-capable factory in the
     ``AttackTechniqueRegistry`` and each requested target, it calls
-    ``factory.create(adversarial_chat=...)`` with the
-    resolved target — no global registry mutation. The resulting
+    ``factory.create(adversarial_chat=...)`` with the resolved target — no global
+    registry mutation. The resulting
     ``AtomicAttack`` is named ``f"{technique}__{target}_{dataset}"`` with
     ``display_group`` set to the target's registry name so per-model ASR
     rolls up naturally in result displays.
@@ -122,13 +138,15 @@ class AdversarialBenchmark(Scenario):
     #: initializer registered rather than only core-tagged factories.
     #: Bumped from 3 → 4 when the no-selection default changed from the ``light``
     #: aggregate to ``role_play_video_game``, ``crescendo_simulated``, and ``tap``.
-    #: Bumped from 4 → 5 when objective scoring changed from the registry-selected
+    #: Bumped from 4 → 5 when every selected adversarial technique began prepending
+    #: shared benchmark guidance to its native system prompt.
+    #: Bumped from 5 → 6 when objective scoring changed from the registry-selected
     #: default to task-achievement evaluation that supports the benchmark's broad
     #: behavior taxonomy.
     #: ``VERSION`` participates in resume identity, so older results cannot be resumed
-    #: as v5. Cache reuse also requires this version so implementation changes cannot
+    #: as v6. Cache reuse also requires this version so implementation changes cannot
     #: silently reuse results produced by an incompatible benchmark definition.
-    VERSION: int = 5
+    VERSION: int = 6
 
     #: AdversarialBenchmark compares attack-success rates across adversarial models; a baseline
     #: attack would be model-independent and contribute no signal to the comparison.
@@ -157,7 +175,7 @@ class AdversarialBenchmark(Scenario):
         """
         Declare benchmark-specific runtime parameters.
 
-        The list is treated as required at run time:
+        The target list is treated as required at run time:
         ``_build_atomic_attacks_async`` raises ``ValueError`` if
         ``self.params["adversarial_targets"]`` is empty or missing. The
         scenario-side error (rather than a declaration-side default) lets
@@ -483,11 +501,14 @@ class AdversarialBenchmark(Scenario):
         Reads the user-supplied ``adversarial_targets`` parameter, resolves each name to a
         ``PromptTarget`` via ``TargetRegistry``, and delegates the
         ``(technique × target × dataset)`` cross-product to ``MatrixAtomicAttackBuilder``
-        with the resolved targets as its adversarial-target axis. Each pair calls
-        ``factory.create(adversarial_chat=...)`` with the resolved target — no global
-        registry state is touched. When cache reuse is enabled, exact compatible
-        prior results are retained for the final scenario result and only their
-        corresponding objective seed groups are removed from execution.
+        with the resolved targets as its adversarial-target axis. Each resolved factory is
+        explicitly derived via ``factory.with_adversarial_system_prompt_prefix(...)`` to layer
+        the shared benchmark guidance ahead of its native adversarial system prompt, before
+        being handed to the builder — the builder and factory stay generic and never see this
+        concept. Each pair then calls ``factory.create(adversarial_chat=...)`` with the
+        resolved target — no global registry state is touched. When cache reuse is enabled,
+        exact compatible prior results are retained for the final scenario result and only
+        their corresponding objective seed groups are removed from execution.
 
         Args:
             context (ScenarioContext): The resolved runtime inputs for this run.
@@ -509,10 +530,14 @@ class AdversarialBenchmark(Scenario):
             )
 
         resolved_targets = self._resolve_adversarial_targets(target_names=target_names)
-        technique_factories = resolve_technique_factories(
-            context=context,
-            extra_factories=self._get_technique_factory_overrides(),
-        )
+        guidance = await asyncio.to_thread(_get_benchmark_adversarial_guidance)
+        technique_factories = {
+            name: factory.with_adversarial_system_prompt_prefix(guidance)
+            for name, factory in resolve_technique_factories(
+                context=context,
+                extra_factories=self._get_technique_factory_overrides(),
+            ).items()
+        }
 
         builder = MatrixAtomicAttackBuilder(
             objective_target=context.objective_target,
