@@ -9,6 +9,8 @@ import enum
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from pyrit.exceptions import AdversarialChatRefusedException, AdversarialChatResponseBlockedException
+
 if TYPE_CHECKING:
     from pyrit.models import AttackResult
 
@@ -26,6 +28,11 @@ class AttackPreparationFailureKind(str, enum.Enum):
     #: model's deployment, not a measurement of the objective target.
     ADVERSARIAL_CHAT_BLOCKED = "adversarial_chat_blocked"
 
+    #: The adversarial model itself declined to generate an attacker turn. Like a provider
+    #: block this leaves nothing to send, but it reflects the adversarial model's own
+    #: alignment rather than a deployment filter, so it is recorded separately.
+    ADVERSARIAL_CHAT_REFUSED = "adversarial_chat_refused"
+
     @property
     def default_reason(self) -> str:
         """
@@ -36,7 +43,25 @@ class AttackPreparationFailureKind(str, enum.Enum):
         """
         if self is AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED:
             return "Adversarial chat was blocked by its provider before the attack could run."
+        if self is AttackPreparationFailureKind.ADVERSARIAL_CHAT_REFUSED:
+            return "Adversarial chat refused to generate an attacker turn before the attack could run."
         return "The attack could not be prepared."
+
+    @classmethod
+    def from_exception(cls, exception: AdversarialChatResponseBlockedException) -> AttackPreparationFailureKind:
+        """
+        Map an adversarial-chat failure to the kind it represents.
+
+        Args:
+            exception (AdversarialChatResponseBlockedException): The raised failure.
+
+        Returns:
+            AttackPreparationFailureKind: ``ADVERSARIAL_CHAT_REFUSED`` for a model refusal,
+            otherwise ``ADVERSARIAL_CHAT_BLOCKED``.
+        """
+        if isinstance(exception, AdversarialChatRefusedException):
+            return cls.ADVERSARIAL_CHAT_REFUSED
+        return cls.ADVERSARIAL_CHAT_BLOCKED
 
 
 @dataclass(frozen=True)

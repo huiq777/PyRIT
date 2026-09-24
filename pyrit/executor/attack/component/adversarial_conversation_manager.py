@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from pyrit.exceptions import (
+    AdversarialChatRefusedException,
     AdversarialChatResponseBlockedException,
     ComponentRole,
     EmptyResponseException,
@@ -208,6 +209,7 @@ def _raise_for_adversarial_error(response: Message) -> None:
         response: The adversarial-chat response to inspect.
 
     Raises:
+        AdversarialChatRefusedException: If the adversarial model declined to answer.
         AdversarialChatResponseBlockedException: If the response was blocked.
         EmptyResponseException: If the response was empty.
         PyritException: If the response carries another error category.
@@ -223,6 +225,15 @@ def _raise_for_adversarial_error(response: Message) -> None:
     response_value = error_piece.converted_value
     if response_error == "blocked":
         status_code, message = _get_error_payload(response_value)
+        # An SDK-reported refusal and a provider content filter both surface as "blocked",
+        # but only the former is the adversarial model's own decision. Keep them distinct so
+        # callers can attribute the failure correctly.
+        structured_refusal = error_piece.structured_refusal
+        if structured_refusal is not None:
+            raise AdversarialChatRefusedException(
+                status_code=status_code if status_code is not None else 400,
+                message=structured_refusal,
+            )
         raise AdversarialChatResponseBlockedException(
             status_code=status_code if status_code is not None else 400,
             message=message,

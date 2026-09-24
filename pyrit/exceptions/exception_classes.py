@@ -229,6 +229,16 @@ class AdversarialChatResponseBlockedException(BadRequestException):
     """Exception raised when an adversarial chat refuses or filters its response."""
 
 
+class AdversarialChatRefusedException(AdversarialChatResponseBlockedException):
+    """
+    Exception raised when the adversarial model itself declined to generate an attacker turn.
+
+    Subclasses :class:`AdversarialChatResponseBlockedException` because both leave the attack
+    with no prompt to send, so existing handlers keep working. Callers that need to tell a
+    deliberate model refusal apart from an infrastructure content filter can catch this first.
+    """
+
+
 class ScorerLLMResponseBlockedException(BadRequestException):
     """Exception raised when a scorer's own LLM response is blocked by content filtering."""
 

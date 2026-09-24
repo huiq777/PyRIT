@@ -184,10 +184,10 @@ class AttackParameters:
             simulated_prompts = simulated_result.seed_prompts
             if "source_conversations" in valid_fields:
                 params["source_conversations"] = frozenset(simulated_result.related_conversations)
-            if simulated_result.preparation_failure_reason is not None:
-                if "preparation_failure_reason" not in valid_fields:
-                    raise AdversarialChatResponseBlockedException(message=simulated_result.preparation_failure_reason)
-                params["preparation_failure_reason"] = simulated_result.preparation_failure_reason
+            if simulated_result.preparation_failure is not None:
+                if "preparation_failure" not in valid_fields:
+                    raise AdversarialChatResponseBlockedException(message=simulated_result.preparation_failure.reason)
+                params["preparation_failure"] = simulated_result.preparation_failure
 
             # Merge simulated prompts with existing static prompts from the seed_group
             all_prompts: list[SeedUnion] = [*seed_group.prompts, *simulated_prompts]

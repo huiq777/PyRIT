@@ -532,7 +532,8 @@ class TestGenerateSimulatedConversationAsync:
             )
 
         assert result.seed_prompts == []
-        assert result.preparation_failure_reason == failure_reason
+        assert result.preparation_failure is not None
+        assert result.preparation_failure.reason == failure_reason
         assert {
             (reference.conversation_id, reference.conversation_type) for reference in result.related_conversations
         } == {
@@ -583,7 +584,8 @@ class TestGenerateSimulatedConversationAsync:
             )
 
         assert result.seed_prompts == []
-        assert result.preparation_failure_reason
+        assert result.preparation_failure is not None
+        assert result.preparation_failure.reason
 
     async def test_final_prompt_block_is_returned_as_preparation_failure(
         self,
@@ -627,9 +629,9 @@ class TestGenerateSimulatedConversationAsync:
                 next_message_system_prompt_path=NextMessageSystemPromptPaths.DIRECT.value,
             )
 
-        assert result.preparation_failure_reason == (
-            "Adversarial chat blocked the attack before it could generate the final simulated prompt."
-        )
+        assert result.preparation_failure is not None
+        assert result.preparation_failure.kind is AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED
+        assert "I cannot assist with that request." in result.preparation_failure.reason
         assert any(
             reference.description == "simulated next-message generation" for reference in result.related_conversations
         )

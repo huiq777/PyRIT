@@ -2,6 +2,7 @@
 # Licensed under the MIT license.
 
 import asyncio
+import copy
 import logging
 from typing import TYPE_CHECKING, cast
 
@@ -20,6 +21,7 @@ from pyrit.models import (
     ScoringExpectation,
 )
 from pyrit.score.observation.execution import _merge_observation_ids
+from pyrit.score.scorer import Scorer
 from pyrit.score.true_false.true_false_score_aggregator import TrueFalseAggregatorFunc, TrueFalseScoreAggregator
 from pyrit.score.true_false.true_false_scorer import TrueFalseScorer
 
@@ -101,6 +103,27 @@ class TrueFalseCompositeScorer(TrueFalseScorer):
             if target is not None:
                 return target
         return None
+
+    def with_scorer_block_policy(self, *, raise_if_scorer_blocks: bool) -> Scorer:
+        """
+        Apply the policy to every constituent scorer.
+
+        Args:
+            raise_if_scorer_blocks (bool): The policy to apply to LLM-backed leaves.
+
+        Returns:
+            Scorer: ``self`` when no constituent changed, otherwise a copy wrapping the
+            updated constituents.
+        """
+        scoped_scorers = [
+            cast("TrueFalseScorer", s.with_scorer_block_policy(raise_if_scorer_blocks=raise_if_scorer_blocks))
+            for s in self._scorers
+        ]
+        if all(new is old for new, old in zip(scoped_scorers, self._scorers, strict=True)):
+            return self
+        scoped = copy.copy(self)
+        scoped._scorers = scoped_scorers
+        return scoped
 
     def matched_conditions(self) -> frozenset[type[Condition]]:
         """

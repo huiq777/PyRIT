@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
+import copy
 import math
 import uuid
 from typing import TYPE_CHECKING, cast
@@ -21,6 +22,7 @@ from pyrit.score.float_scale.float_scale_score_aggregator import FloatScaleAggre
 from pyrit.score.float_scale.float_scale_scorer import FloatScaleScorer
 from pyrit.score.observation.execution import _merge_observation_ids
 from pyrit.score.score_utils import ORIGINAL_FLOAT_VALUE_KEY
+from pyrit.score.scorer import Scorer
 from pyrit.score.true_false.true_false_scorer import TrueFalseScorer
 
 
@@ -103,6 +105,26 @@ class FloatScaleThresholdScorer(TrueFalseScorer):
             PromptTarget | None: The chat target from the wrapped scorer.
         """
         return self._scorer.get_chat_target()
+
+    def with_scorer_block_policy(self, *, raise_if_scorer_blocks: bool) -> Scorer:
+        """
+        Apply the policy to the wrapped float-scale scorer.
+
+        Args:
+            raise_if_scorer_blocks (bool): The policy to apply to LLM-backed leaves.
+
+        Returns:
+            Scorer: ``self`` when the wrapped scorer is unchanged, otherwise a copy wrapping
+            the updated scorer.
+        """
+        scoped_inner = cast(
+            "FloatScaleScorer", self._scorer.with_scorer_block_policy(raise_if_scorer_blocks=raise_if_scorer_blocks)
+        )
+        if scoped_inner is self._scorer:
+            return self
+        scoped = copy.copy(self)
+        scoped._scorer = scoped_inner
+        return scoped
 
     def matched_conditions(self) -> frozenset[type[Condition]]:
         """

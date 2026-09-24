@@ -1106,6 +1106,8 @@ class TestGetDefaultObjectiveScorer:
 
         mock_scorer = MagicMock(spec=TrueFalseScorer)
         mock_scorer.__class__ = TrueFalseScorer
+        # A scorer with no LLM-backed leaf returns itself rather than a copy.
+        mock_scorer.with_scorer_block_policy.return_value = mock_scorer
 
         mock_entry = MagicMock()
         mock_entry.instance = mock_scorer
@@ -1129,11 +1131,33 @@ class TestGetDefaultObjectiveScorer:
     def test_registry_scorer_gets_block_policy_without_mutating_shared_instance(
         self, mock_registry_cls, mock_get_scorer_target, raise_if_blocks: bool
     ) -> None:
-        """The registry default is a shared singleton, so the policy must land on a copy."""
-        from pyrit.score import SubStringScorer
+        """The registry default is a shared instance, so the policy must land on a copy.
 
-        registry_scorer = SubStringScorer(substring="unused")
-        registry_scorer.raise_if_scorer_blocks = not raise_if_blocks
+        The shape mirrors the registered ``scale_and_refusal`` default: a composite whose
+        LLM-backed leaves sit behind a threshold wrapper and an inverter. A policy applied
+        only to the composite would never reach them.
+        """
+        from pyrit.score import (
+            FloatScaleThresholdScorer,
+            PlagiarismScorer,
+            SubStringScorer,
+            TrueFalseCompositeScorer,
+            TrueFalseInverterScorer,
+            TrueFalseScoreAggregator,
+        )
+
+        scale_leaf = PlagiarismScorer(reference_text="unused")
+        refusal_leaf = SubStringScorer(substring="unused")
+        scale_leaf.raise_if_scorer_blocks = not raise_if_blocks
+        refusal_leaf.raise_if_scorer_blocks = not raise_if_blocks
+
+        registry_scorer = TrueFalseCompositeScorer(
+            aggregator=TrueFalseScoreAggregator.AND,
+            scorers=[
+                FloatScaleThresholdScorer(scorer=scale_leaf, threshold=0.5),
+                TrueFalseInverterScorer(scorer=refusal_leaf),
+            ],
+        )
 
         mock_entry = MagicMock()
         mock_entry.instance = registry_scorer
@@ -1149,9 +1173,16 @@ class TestGetDefaultObjectiveScorer:
 
         result = Scenario._get_default_objective_scorer(mock_self)
 
+        # The policy reached both LLM-backed leaves, not just the composite root.
+        scoped_scale = result._scorers[0]._scorer
+        scoped_refusal = result._scorers[1]._scorer
+        assert scoped_scale.raise_if_scorer_blocks is raise_if_blocks
+        assert scoped_refusal.raise_if_scorer_blocks is raise_if_blocks
+
+        # The shared registry instance and its leaves were left untouched.
         assert result is not registry_scorer
-        assert result.raise_if_scorer_blocks is raise_if_blocks
-        assert registry_scorer.raise_if_scorer_blocks is (not raise_if_blocks)
+        assert scale_leaf.raise_if_scorer_blocks is (not raise_if_blocks)
+        assert refusal_leaf.raise_if_scorer_blocks is (not raise_if_blocks)
 
     @pytest.mark.parametrize("raise_if_blocks", [True, False])
     @patch("pyrit.scenario.core.scenario.get_default_scorer_target")

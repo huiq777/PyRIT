@@ -12,10 +12,7 @@ from pyrit.exceptions import ComponentRole, execution_context
 from pyrit.executor.attack.component import ConversationManager, PrependedConversationConfig
 from pyrit.executor.attack.core.attack_config import AttackConverterConfig, AttackScoringConfig
 from pyrit.executor.attack.core.attack_parameters import AttackParameters, AttackParamsT
-from pyrit.executor.attack.core.attack_preparation import (
-    AttackPreparationFailure,
-    AttackPreparationFailureKind,
-)
+from pyrit.executor.attack.core.attack_preparation import AttackPreparationFailure
 from pyrit.executor.attack.core.attack_strategy import attack_outcome_from_score
 from pyrit.executor.attack.single_turn.single_turn_attack_strategy import (
     SingleTurnAttackContext,
@@ -43,7 +40,7 @@ logger = logging.getLogger(__name__)
 class PromptSendingAttackParameters(AttackParameters):
     """Parameters for prompt sending, including simulated-conversation preparation state."""
 
-    preparation_failure_reason: str | None = None
+    preparation_failure: AttackPreparationFailure | None = None
 
 
 class PromptSendingAttack(SingleTurnAttackStrategy):
@@ -192,15 +189,11 @@ class PromptSendingAttack(SingleTurnAttackStrategy):
         self._logger.info(f"Starting {self.__class__.__name__} with objective: {context.objective}")
         self._logger.info(f"Max attempts: {self._max_attempts_on_failure}")
 
-        preparation_failure_reason = getattr(context.params, "preparation_failure_reason", None)
-        if preparation_failure_reason:
+        preparation_failure = getattr(context.params, "preparation_failure", None)
+        if preparation_failure is not None:
             # Preparation never produced an attacker turn, so nothing was sent to the objective
             # target. Record it as UNDETERMINED with the typed signal attached so downstream
             # consumers can tell "not measured" apart from "measured and failed".
-            preparation_failure = AttackPreparationFailure(
-                kind=AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED,
-                reason=preparation_failure_reason,
-            )
             return self._create_attack_result(
                 context=context,
                 response=None,

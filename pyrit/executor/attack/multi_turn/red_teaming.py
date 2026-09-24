@@ -351,13 +351,14 @@ class RedTeamingAttack(MultiTurnAttackStrategy[MultiTurnAttackContext[Any], Atta
                 message_to_send = await self._generate_next_prompt_async(
                     context=context, adversarial_manager=adversarial_manager
                 )
-            except AdversarialChatResponseBlockedException:
-                # The adversarial model's provider blocked its own response, so no attacker turn
-                # exists and the objective target was never probed. That is an absence of data,
-                # not a defensive win for the target, so the outcome stays UNDETERMINED.
+            except AdversarialChatResponseBlockedException as blocked:
+                # The adversarial model produced no attacker turn, so the objective target was
+                # never probed. That is an absence of data, not a defensive win for the target,
+                # so the outcome stays UNDETERMINED.
+                kind = AttackPreparationFailureKind.from_exception(blocked)
                 preparation_failure = AttackPreparationFailure(
-                    kind=AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED,
-                    reason="Adversarial chat blocked the attack before it could generate the next prompt.",
+                    kind=kind,
+                    reason=f"{kind.default_reason} Details: {blocked}",
                 )
                 return self._create_attack_result(
                     context=context,

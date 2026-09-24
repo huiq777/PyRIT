@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pyrit.exceptions import AdversarialChatResponseBlockedException, BadRequestException
+from pyrit.exceptions import (
+    AdversarialChatRefusedException,
+    AdversarialChatResponseBlockedException,
+    BadRequestException,
+)
 from pyrit.executor.attack import (
     AttackAdversarialConfig,
     AttackConverterConfig,
@@ -1113,12 +1117,21 @@ class TestResponseScoring:
 class TestAttackExecution:
     """Tests for the main attack execution logic."""
 
+    @pytest.mark.parametrize(
+        "exception_cls, expected_kind",
+        [
+            (AdversarialChatResponseBlockedException, AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED),
+            (AdversarialChatRefusedException, AttackPreparationFailureKind.ADVERSARIAL_CHAT_REFUSED),
+        ],
+    )
     async def test_adversarial_chat_block_is_undetermined_not_a_measured_failure(
         self,
         mock_objective_target: MagicMock,
         mock_adversarial_chat: MagicMock,
         mock_objective_scorer: MagicMock,
         mock_prompt_normalizer: MagicMock,
+        exception_cls: type[AdversarialChatResponseBlockedException],
+        expected_kind: AttackPreparationFailureKind,
     ) -> None:
         adversarial_config = AttackAdversarialConfig(target=mock_adversarial_chat)
         scoring_config = AttackScoringConfig(objective_scorer=mock_objective_scorer)
@@ -1133,7 +1146,7 @@ class TestAttackExecution:
                 attack,
                 "_generate_next_prompt_async",
                 new_callable=AsyncMock,
-                side_effect=AdversarialChatResponseBlockedException(
+                side_effect=exception_cls(
                     status_code=200,
                     message="I cannot assist with that request.",
                 ),
@@ -1152,11 +1165,11 @@ class TestAttackExecution:
         assert result.automated_score is None
         preparation_failure = AttackPreparationFailure.from_result(result=result)
         assert preparation_failure is not None
-        assert preparation_failure.kind is AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED
+        assert preparation_failure.kind is expected_kind
         assert preparation_failure.reason
         assert len(result.related_conversations) == 1
         assert next(iter(result.related_conversations)).conversation_type is ConversationType.ADVERSARIAL
-        assert "Adversarial chat blocked" in (result.outcome_reason or "")
+        assert "I cannot assist with that request." in (result.outcome_reason or "")
         mock_send.assert_not_awaited()
         [persisted_result] = CentralMemory.get_memory_instance().get_attack_results(objective="Test objective")
         assert persisted_result.outcome is AttackOutcome.UNDETERMINED

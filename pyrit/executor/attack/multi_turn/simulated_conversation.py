@@ -25,7 +25,10 @@ from pyrit.executor.attack.core.attack_config import (
     AttackConverterConfig,
     AttackScoringConfig,
 )
-from pyrit.executor.attack.core.attack_preparation import AttackPreparationFailure
+from pyrit.executor.attack.core.attack_preparation import (
+    AttackPreparationFailure,
+    AttackPreparationFailureKind,
+)
 from pyrit.executor.attack.multi_turn.red_teaming import RedTeamingAttack
 from pyrit.memory import CentralMemory
 from pyrit.message_normalizer import ConversationContextNormalizer
@@ -56,7 +59,7 @@ class SimulatedConversationResult:
 
     seed_prompts: list[SeedPrompt]
     related_conversations: frozenset[ConversationReference]
-    preparation_failure_reason: str | None = None
+    preparation_failure: AttackPreparationFailure | None = None
 
 
 async def _resolve_prompt_source_async(
@@ -245,10 +248,9 @@ async def generate_simulated_conversation_async(
     }
 
     preparation_failure = AttackPreparationFailure.from_result(result=result)
-    preparation_failure_reason = preparation_failure.reason if preparation_failure else None
 
     # If a next-message prompt is configured, generate a final user message
-    if next_message_system_prompt and preparation_failure_reason is None:
+    if next_message_system_prompt and preparation_failure is None:
         next_message_conversation_id = str(uuid4())
         try:
             next_message = await _generate_next_message_async(
@@ -261,9 +263,11 @@ async def generate_simulated_conversation_async(
                 memory_labels=memory_labels,
             )
             conversation_messages.append(next_message)
-        except AdversarialChatResponseBlockedException:
-            preparation_failure_reason = (
-                "Adversarial chat blocked the attack before it could generate the final simulated prompt."
+        except AdversarialChatResponseBlockedException as blocked:
+            kind = AttackPreparationFailureKind.from_exception(blocked)
+            preparation_failure = AttackPreparationFailure(
+                kind=kind,
+                reason=f"{kind.default_reason} Details: {blocked}",
             )
         finally:
             related_conversations.add(
@@ -285,7 +289,7 @@ async def generate_simulated_conversation_async(
     return SimulatedConversationResult(
         seed_prompts=seed_prompts,
         related_conversations=frozenset(related_conversations),
-        preparation_failure_reason=preparation_failure_reason,
+        preparation_failure=preparation_failure,
     )
 
 

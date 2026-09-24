@@ -1328,7 +1328,10 @@ class TestEdgeCasesAndErrorHandling:
         context = SingleTurnAttackContext(
             params=PromptSendingAttackParameters(
                 objective="Test objective",
-                preparation_failure_reason=failure_reason,
+                preparation_failure=AttackPreparationFailure(
+                    kind=AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED,
+                    reason=failure_reason,
+                ),
                 source_conversations=frozenset(
                     {
                         ConversationReference(
@@ -1377,7 +1380,10 @@ class TestEdgeCasesAndErrorHandling:
                     )
                 }
             ),
-            preparation_failure_reason=failure_reason,
+            preparation_failure=AttackPreparationFailure(
+                kind=AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED,
+                reason=failure_reason,
+            ),
         )
         seed_group = AttackSeedGroup(
             seeds=[

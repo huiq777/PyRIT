@@ -10,6 +10,10 @@ from pyrit.exceptions import AdversarialChatResponseBlockedException
 from pyrit.executor.attack.core.attack_parameters import (
     AttackParameters,
 )
+from pyrit.executor.attack.core.attack_preparation import (
+    AttackPreparationFailure,
+    AttackPreparationFailureKind,
+)
 from pyrit.executor.attack.multi_turn.simulated_conversation import SimulatedConversationResult
 from pyrit.executor.attack.single_turn.prompt_sending import PromptSendingAttackParameters
 from pyrit.models import (
@@ -308,7 +312,10 @@ class TestFromSeedGroupAsyncWithSimulatedConversation:
         mock_generate.return_value = SimulatedConversationResult(
             seed_prompts=[],
             related_conversations=frozenset({reference}),
-            preparation_failure_reason=failure_reason,
+            preparation_failure=AttackPreparationFailure(
+                kind=AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED,
+                reason=failure_reason,
+            ),
         )
 
         params = await PromptSendingAttackParameters.from_seed_group_async(
@@ -317,11 +324,12 @@ class TestFromSeedGroupAsyncWithSimulatedConversation:
             objective_scorer=mock_objective_scorer,
         )
 
-        assert params.preparation_failure_reason == failure_reason
+        assert params.preparation_failure is not None
+        assert params.preparation_failure.reason == failure_reason
         assert params.source_conversations == frozenset({reference})
 
     @patch("pyrit.executor.attack.multi_turn.simulated_conversation.generate_simulated_conversation_async")
-    async def test_unsupported_params_preserve_preparation_failure_reason(
+    async def test_unsupported_params_preserve_preparation_failure(
         self,
         mock_generate: AsyncMock,
         seed_group_with_simulated_conv: AttackSeedGroup,
@@ -332,7 +340,10 @@ class TestFromSeedGroupAsyncWithSimulatedConversation:
         mock_generate.return_value = SimulatedConversationResult(
             seed_prompts=[],
             related_conversations=frozenset(),
-            preparation_failure_reason=failure_reason,
+            preparation_failure=AttackPreparationFailure(
+                kind=AttackPreparationFailureKind.ADVERSARIAL_CHAT_BLOCKED,
+                reason=failure_reason,
+            ),
         )
 
         with pytest.raises(AdversarialChatResponseBlockedException, match=failure_reason):

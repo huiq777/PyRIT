@@ -9,14 +9,13 @@ AtomicAttack instances sequentially, enabling comprehensive security testing cam
 """
 
 import asyncio
-import copy
 import logging
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, final
+from typing import TYPE_CHECKING, Any, ClassVar, cast, final
 
 from tqdm.auto import tqdm
 
@@ -24,6 +23,7 @@ from pyrit.common import get_global_default_values
 from pyrit.common.utils import to_sha256
 from pyrit.exceptions import ScenarioPartialFailureException
 from pyrit.executor.attack import AttackExecutor, AttackExecutorResult
+from pyrit.executor.attack.core.attack_preparation import AttackPreparationFailure
 from pyrit.memory import CentralMemory
 from pyrit.memory.memory_models import ScenarioResultEntry
 from pyrit.models import (
@@ -59,7 +59,6 @@ from pyrit.scenario.core.scenario_context import ScenarioContext
 from pyrit.scenario.core.scenario_target_defaults import get_default_scorer_target
 from pyrit.scenario.core.scenario_technique import ScenarioTechnique
 from pyrit.score import (
-    MessageScorer,
     Scorer,
     SelfAskRefusalScorer,
     SelfAskTrueFalseScorer,
@@ -480,25 +479,22 @@ class Scenario(ABC):
         """
         Apply ``RAISE_IF_DEFAULT_SCORER_BLOCKS`` to a scorer this scenario did not construct.
 
-        The registry default scorer is a shared singleton handed to every scenario, so the
-        policy is applied to a shallow copy rather than by mutating the instance. The copy
-        keeps sharing the chat target and other collaborators, which is what callers expect;
-        only the block policy differs.
+        The registry default scorer is a shared instance handed to every scenario, and it is
+        typically a composite wrapping the scorers that actually call an LLM. Delegating to
+        ``with_scorer_block_policy`` lets each wrapper reach its own leaves and copy only what
+        changed, so the shared instance is never mutated.
 
         Args:
             scorer (TrueFalseScorer): The scorer to apply the policy to.
 
         Returns:
             TrueFalseScorer: ``scorer`` unchanged when it already matches the policy or
-            cannot express it, otherwise an independent copy carrying the policy.
+            cannot express it, otherwise an independent scorer carrying the policy.
         """
-        if not isinstance(scorer, MessageScorer):
-            return scorer
-        if scorer.raise_if_scorer_blocks == self.RAISE_IF_DEFAULT_SCORER_BLOCKS:
-            return scorer
-        scoped_scorer = copy.copy(scorer)
-        scoped_scorer.raise_if_scorer_blocks = self.RAISE_IF_DEFAULT_SCORER_BLOCKS
-        return scoped_scorer
+        return cast(
+            "TrueFalseScorer",
+            scorer.with_scorer_block_policy(raise_if_scorer_blocks=self.RAISE_IF_DEFAULT_SCORER_BLOCKS),
+        )
 
     def set_params_from_args(self, *, args: dict[str, Any]) -> None:
         """
@@ -1363,10 +1359,15 @@ class Scenario(ABC):
         try:
             rows = self._memory.get_attack_results(scenario_result_id=self._scenario_result_id)
             for row in rows:
-                # ERROR rows hit infrastructure problems and UNDETERMINED rows never reached a
-                # verdict (e.g. the adversarial chat was blocked before any prompt was sent).
-                # Neither measured the objective, so both stay pending for the next resume.
-                if row.outcome in (AttackOutcome.ERROR, AttackOutcome.UNDETERMINED):
+                # ERROR rows hit infrastructure problems, and preparation failures never reached
+                # the objective target at all, so neither measured the objective and both stay
+                # pending. Every other row did reach the target and recorded the best verdict
+                # available -- including UNDETERMINED when no scorer was configured or the scorer
+                # abstained. Those are measured results of a deterministic configuration; retrying
+                # them would re-send the objective on every resume without ever converging.
+                if row.outcome == AttackOutcome.ERROR:
+                    continue
+                if AttackPreparationFailure.from_result(result=row) is not None:
                     continue
                 if row.attribution_data is None:
                     continue
